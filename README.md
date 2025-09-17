@@ -11,14 +11,48 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 - Exporta los resultados como shapefiles compatibles con SIG.
 - Incluye scripts de visualización para comparar rutas y analizar resultados.
 
-## Estructura del proyecto
-- `LCP.ipynb`: Notebook principal con todo el flujo de análisis, desde la configuración hasta la visualización.
-- `pyproject.toml`: Definición de dependencias y metadatos del proyecto.
-- `uv.lock`: Detalles de versiones de dependencias instaladas.
-- `README.md`: Este archivo.
+## Estructura y estado actual del proyecto
 
+### Carpetas principales
+- **`data/`**: Archivos de entrada (raster de coste, shapefiles de puntos y máscara poligonal).
+- **`output/`**: Resultados de cada sesión, organizados por fecha/hora, con shapefiles de rutas calculadas.
+- **`lcp/`**: Módulo principal con la lógica del proyecto:
+   - `data_loader.py`: Carga raster, puntos y máscara.
+   - `processing.py`: Procesamiento raster, downsampling, creación de máscaras y corredores.
+   - `pathfinder.py`: Algoritmo A* optimizado con Numba.
+   - `utils.py`: Utilidades para guardar rutas y manejo de geometrías.
+   - `__init__.py`: Inicialización del paquete.
 
-- numpy, rasterio, fiona, geopandas, shapely, scikit-image, matplotlib, matplotlib-scalebar, tqdm, numba, pandas, jupyterlab
+### Archivos principales
+- **`lcp.py`**: Script ejecutable que orquesta el análisis completo fuera de Jupyter.
+- **`LCP.ipynb`, `LCP_N2N.ipynb`, `LCP_base.ipynb`**: Notebooks para ejecutar el análisis, visualizar resultados y probar variantes.
+- **`LCP_VSH.py`**: Script alternativo para flujos personalizados o pruebas.
+- **`pyproject.toml`**: Configuración y dependencias del proyecto.
+- **`uv.lock`**: Bloqueo de versiones de dependencias.
+- **`LICENSE`**: Licencia de uso (CC BY-NC 4.0).
+- **`README.md`**: Este archivo.
+
+### Función de cada archivo
+- **Notebooks (`*.ipynb`)**: Ejecución paso a paso, visualización y comparación de rutas.
+- **Scripts (`*.py`)**: Automatización del flujo, cálculo y manejo de datos.
+- **Carpetas `data/` y `output/`**: Entrada y salida del sistema.
+- **Módulos en `lcp/`**: Lógica separada en carga de datos, procesamiento, cálculo de rutas y utilidades.
+
+### Dependencias utilizadas
+El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml`):
+- `fiona`
+- `geopandas`
+- `jupyterlab`
+- `matplotlib-scalebar`
+- `numba`
+- `numpy`
+- `pandas`
+- `rasterio`
+- `scikit-image`
+- `shapely`
+- `tqdm`
+
+Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálculo de rutas, optimización, visualización y ejecución en notebooks.
 
 ## Instalación y uso con UV y Jupyter Lab
 
