@@ -23,6 +23,7 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 ## Instalación y uso con UV y Jupyter Lab
 
 1. Instala [uv](https://github.com/astral-sh/uv) si no lo tienes:
+	
 	a. Con Pypy:
 
    - **Windows**:
@@ -56,15 +57,12 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 2. Instala todas las dependencias del proyecto usando `uv add`:
    
    ```sh
-   uv add -r requirements.txt
-   # o si usas pyproject.toml
    uv add -r pyproject.toml
    ```
 
 3. Inicia Jupyter Lab:
    
    ```sh
-   uv add jupyterlab  # Si no está instalado
    jupyter lab
    ```
 
