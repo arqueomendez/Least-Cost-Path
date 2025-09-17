@@ -1,4 +1,3 @@
-
 # Least-Cost-Path
 
 ## Descripción
@@ -24,27 +23,38 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 ## Instalación y uso con UV y Jupyter Lab
 
 1. Instala [uv](https://github.com/astral-sh/uv) si no lo tienes:
-   
-	```sh
-	pip install uv
-	```
 
-2. Instala todas las dependencias del proyecto:
+   - **Windows**:
+     ```sh
+     pip install uv
+     ```
+   - **macOS**:
+     ```sh
+     brew install uv
+     # o
+     pip install uv
+     ```
+   - **Linux**:
+     ```sh
+     pipx install uv
+     # o
+     pip install uv
+     ```
+
+2. Instala todas las dependencias del proyecto usando `uv add`:
    
-	```sh
-	uv pip install -r requirements.txt
-	```
-	O si usas `pyproject.toml`:
-	```sh
-	uv pip install -r pyproject.toml
-	```
+   ```sh
+   uv add -r requirements.txt
+   # o si usas pyproject.toml
+   uv add -r pyproject.toml
+   ```
 
 3. Inicia Jupyter Lab:
    
-	```sh
-	uv pip install jupyterlab  # Si no está instalado
-	jupyter lab
-	```
+   ```sh
+   uv add jupyterlab  # Si no está instalado
+   jupyter lab
+   ```
 
 4. Abre y ejecuta el notebook `LCP.ipynb`.
 
@@ -67,6 +77,34 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 2. Ejecuta la celda principal para calcular la ruta entre dos puntos o de uno a todos.
 3. Los resultados se guardan en una carpeta con marca de tiempo.
 4. Ejecuta la celda de visualización para generar mapas comparativos.
+
+## Método de trabajo (según LCP.ipynb)
+
+El flujo de trabajo implementado en el notebook `LCP.ipynb` sigue una metodología robusta y reproducible para el cálculo de rutas de menor coste:
+
+1. **Configuración y validación de insumos**
+   - Se definen rutas y parámetros clave (carpetas, archivos raster y vectoriales, IDs de puntos, factores de downsampling, etc.).
+   - Se valida que todos los puntos de entrada estén dentro del área permitida por la máscara poligonal. Si algún punto está fuera, el proceso se cancela y se registra el error.
+
+2. **Gestión de sesiones y reanudación automática**
+   - El sistema crea una carpeta de sesión con marca de tiempo para cada ejecución.
+   - Si existe una sesión previa incompleta, el proceso la detecta y reanuda automáticamente desde el último punto pendiente.
+   - El registro maestro (`registro_maestro_procesamiento.log`) documenta todo el proceso y los errores.
+
+3. **Cálculo jerárquico de rutas (A* optimizado)**
+   - Para cada destino, se realiza primero una búsqueda en baja resolución (downsampling) usando varios factores. Esto permite encontrar un corredor estratégico de menor coste.
+   - Si la búsqueda en baja resolución tiene éxito, se genera un corredor de búsqueda en alta resolución alrededor de la ruta preliminar.
+   - Se realiza la búsqueda final en alta resolución, restringida al corredor. Si falla, se aplica un "plan B" usando toda la máscara rasterizada.
+   - Todo el proceso incluye logging detallado y reportes de progreso integrados con tqdm.
+
+4. **Exportación y visualización de resultados**
+   - Las rutas calculadas se exportan como shapefiles, tanto de la fase preliminar como de la final.
+   - El notebook incluye funciones para visualizar y comparar rutas exportadas.
+
+5. **Robustez y reproducibilidad**
+   - El código maneja errores de insumos, proyecciones y rutas vacías.
+   - El uso de máscaras vectoriales y validación previa garantiza que los resultados sean espacialmente coherentes.
+   - El sistema de logging y reanudación automática permite ejecutar análisis largos sin perder avances.
 
 ## Notas técnicas
 - El código está optimizado para grandes superficies raster y rutas largas.
