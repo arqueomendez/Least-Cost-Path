@@ -1,20 +1,21 @@
 # Least-Cost-Path
 
 ## Descripción
-Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cálculo de rutas de menor coste sobre superficies raster, utilizando algoritmos jerárquicos y optimizados. Permite encontrar rutas óptimas entre puntos o entre un punto y todos los demás, considerando superficies de fricción y restricciones espaciales.
+Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cálculo de rutas de menor coste sobre superficies raster, utilizando algoritmos jerárquicos y optimizados. Permite encontrar rutas óptimas entre puntos o entre un punto y todos los demás, considerando superficies de fricción y restricciones espaciales. Least-Cost-Path ha sido desarrollado para ser utilizado en arqueología, con la finalidad de realizar análisis de movimientos en diversos tipos de espacios. La superficie de raster a partir del cual se realiza el cálculo debe ser considerado un modelo teórico que contiene el coste o fricción para desplazarse entre los pixeles. 
 
 ## Características principales
 - Implementa el algoritmo A* optimizado con Numba para alto rendimiento.
 - Soporta análisis jerárquico en dos fases: primero en baja resolución para encontrar un corredor estratégico y luego en alta resolución para el detalle final.
-- **NUEVO**: Permite restringir el área de búsqueda a un polígono vectorial (shapefile) para evitar rutas no deseadas y mejorar la precisión.
+- Permite restringir el área de búsqueda a un polígono vectorial (shapefile) para evitar rutas no deseadas y mejorar la precisión.
 - Permite calcular rutas entre dos puntos o desde un punto origen a todos los destinos definidos en un shapefile.
 - Exporta los resultados como shapefiles compatibles con SIG.
 - Incluye scripts de visualización para comparar rutas y analizar resultados.
+- Es posible correr el software tanto directamente en un ejecutable directo en Python como mediante Jupyter Notebook.
 
 ## Estructura y estado actual del proyecto
 
 ### Carpetas principales
-- **`data/`**: Archivos de entrada (raster de coste, shapefiles de puntos y máscara poligonal).
+- **`data/`**: Archivos de entrada de prueba (raster de coste, shapefiles de puntos y máscara poligonal).
 - **`output/`**: Resultados de cada sesión, organizados por fecha/hora, con shapefiles de rutas calculadas.
 - **`lcp/`**: Módulo principal con la lógica del proyecto:
    - `data_loader.py`: Carga raster, puntos y máscara.
@@ -25,7 +26,8 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 
 ### Archivos principales
 - **`lcp.py`**: Script ejecutable que orquesta el análisis completo fuera de Jupyter.
-- **`LCP.ipynb`, `LCP_N2N.ipynb`, `LCP_base.ipynb`**: Notebooks para ejecutar el análisis, visualizar resultados y probar variantes.
+- **`LCP_N2N.ipynb`**: Notebooks para ejecutar el análisis de todos a todos los puntos, visualizar resultados y probar variantes.
+- **`LCP_base.ipynb`**: Notebooks para ejecutar el análisis de un punto a todos, visualizar resultados y probar variantes.
 - **`LCP_VSH.py`**: Script alternativo para flujos personalizados o pruebas.
 - **`pyproject.toml`**: Configuración y dependencias del proyecto.
 - **`uv.lock`**: Bloqueo de versiones de dependencias.
@@ -104,14 +106,15 @@ Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálcu
 
 ## Uso básico
 1. Prepara los archivos de entrada:
-	- Un raster de coste (`final_total_cost.tif`).
-	- Shapefiles de puntos de inicio y fin, o un shapefile con todos los puntos.
-	- **Opcional**: Un shapefile con un polígono que defina el área de búsqueda permitida.
-2. Abre y ejecuta el notebook `LCP.ipynb` en JupyterLab.
+	- Un raster de coste (`cost.tif`).
+	- Shapefiles con todos los puntos (`points.shp`).
+	- **Opcional**: Un shapefile con un polígono que defina el área de búsqueda permitida (`area-mask.shp`).
+2. Abre y ejecuta el notebook `LCP_base.ipynb` en JupyterLab.
 3. Ajusta las rutas y parámetros en las primeras celdas:
-    - `BASE_PATH`: La carpeta principal de tu proyecto.
+    - `BASE_PROCESSING_FOLDER`: La carpeta principal de tu proyecto.
+    - `POINTS_SUBFOLDER`: Rutas a los puntos de inicio/fin.
     - `COST_RASTER_PATH`: La ruta a tu ráster de coste.
-    - `START_SHAPEFILE_PATH` / `END_SHAPEFILE_PATH`: Rutas a los puntos de inicio/fin.
+    - `ALL_POINTS_SHAPEFILE`: Shapefiles con todos los puntos (`points.shp`).
     - `MASK_SHAPEFILE_PATH`: **Importante**, establece aquí la ruta a tu shapefile de máscara o déjalo como `None` si no quieres usarlo.
 4. Ejecuta las celdas para calcular rutas y exportar resultados.
 5. Usa las funciones de visualización para analizar y comparar rutas.
@@ -122,9 +125,9 @@ Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálcu
 3. Los resultados se guardan en una carpeta con marca de tiempo.
 4. Ejecuta la celda de visualización para generar mapas comparativos.
 
-## Método de trabajo (según LCP.ipynb)
+## Método de trabajo (según LCP_base.ipynb)
 
-El flujo de trabajo implementado en el notebook `LCP.ipynb` sigue una metodología robusta y reproducible para el cálculo de rutas de menor coste:
+El flujo de trabajo implementado en el notebook `LCP_base.ipynb` sigue una metodología robusta y reproducible para el cálculo de rutas de menor coste:
 
 1. **Configuración y validación de insumos**
    - Se definen rutas y parámetros clave (carpetas, archivos raster y vectoriales, IDs de puntos, factores de downsampling, etc.).
@@ -136,6 +139,7 @@ El flujo de trabajo implementado en el notebook `LCP.ipynb` sigue una metodolog�
    - El registro maestro (`registro_maestro_procesamiento.log`) documenta todo el proceso y los errores.
 
 3. **Cálculo jerárquico de rutas (A* optimizado)**
+   - Si la máscara está activada, se realiza un cálculo para verificar que todos los puntos se encuentren dentro del espacio. Si no es así, el análisis se detiene.
    - Para cada destino, se realiza primero una búsqueda en baja resolución (downsampling) usando varios factores. Esto permite encontrar un corredor estratégico de menor coste.
    - Si la búsqueda en baja resolución tiene éxito, se genera un corredor de búsqueda en alta resolución alrededor de la ruta preliminar.
    - Se realiza la búsqueda final en alta resolución, restringida al corredor. Si falla, se aplica un "plan B" usando toda la máscara rasterizada.
@@ -164,7 +168,7 @@ Este software se distribuye bajo una licencia de atribución, uso no comercial y
 	- Mantengas esta licencia y la sección de atribución en cualquier copia o derivado.
 	- Cites explícitamente el siguiente texto en cualquier uso, publicación o derivado:
 
-		> "Least-Cost-Path (LCP) desarrollado por Víctor Méndez."
+		> "Least-Cost-Path (LCP) desarrollado por Víctor Méndez, 2025."
 
 - El uso en investigación, docencia y proyectos personales está permitido.
 - Para cualquier uso comercial, se debe solicitar autorización expresa al autor.
