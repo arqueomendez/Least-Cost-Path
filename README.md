@@ -181,3 +181,15 @@ Este software se distribuye bajo una licencia de atribución, uso no comercial y
 
 ## Autoría
 Desarrollado por Víctor Méndez, con asistencia de Gemini 2.5 Pro.
+
+## How to Cite
+
+If you use this software in your research, please cite it as follows:
+
+```bibtex
+@software{Mendez_Least_Cost_Path,
+  author = {Méndez, Víctor},
+  title = {{Least-Cost-Path: A Python tool for Least Cost Path analysis in archaeology}},
+  url = {https://github.com/arqueomendez/Least-Cost-Path},
+  year = {2025}
+}
