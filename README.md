@@ -90,10 +90,16 @@ Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálcu
      curl -LsSf https://astral.sh/uv/install.sh | sh
      ```
 
-2. Instala todas las dependencias del proyecto usando `uv add`:
+2. Instala todas las dependencias del proyecto usando:
    
+   - **Con uv**:
    ```sh
    uv add -r pyproject.toml
+   ```
+
+   - **Con pip**:
+   ```sh
+   pip install -r requirements.txt
    ```
 
 3. Inicia Jupyter Lab:
