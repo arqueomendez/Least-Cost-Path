@@ -1,0 +1,58 @@
+2025-09-18 23:35:00,077 - INFO - ==================================================
+2025-09-18 23:35:00,078 - INFO - INICIANDO NUEVA EJECUCIÓN PARALELA (UNO A TODOS)
+2025-09-18 23:35:00,078 - INFO - ==================================================
+2025-09-18 23:35:00,096 - INFO - MODO REANUDACIÓN: Reanudando sesión incompleta '20250918_233206_desde_punto_0'.
+2025-09-18 23:35:00,120 - INFO - Cargando datos compartidos (raster, máscara) a RAM...
+2025-09-18 23:35:00,132 - INFO - Verificando puntos contra la máscara...
+2025-09-18 23:35:00,133 - INFO - VERIFICACIÓN SUPERADA: Todos los puntos están dentro del área.
+2025-09-18 23:35:00,137 - CRITICAL - ¡ANÁLISIS CANCELADO! El punto de origen con ID '0' no se encontró en el campo 'id' del shapefile.
+2025-09-18 23:35:00,137 - CRITICAL - IDs disponibles: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+2025-09-18 23:35:00,138 - CRITICAL - Error fatal en el proceso principal: 'NoneType' object is not subscriptable
+Traceback (most recent call last):
+  File "C:\Users\Victor\AppData\Local\Temp\ipykernel_31152\2515643348.py", line 262, in <module>
+    start_pixel_hr = world_to_pixel(src.transform, origin_coords[0], origin_coords[1])
+                                                   ~~~~~~~~~~~~~^^^
+TypeError: 'NoneType' object is not subscriptable
+2025-09-18 23:35:00,138 - INFO - ================== EJECUCIÓN FINALIZADA ==================
+
+
+2025-09-18 23:38:35,576 - INFO - ==================================================
+2025-09-18 23:38:35,576 - INFO - INICIANDO NUEVA EJECUCIÓN PARALELA (UNO A TODOS)
+2025-09-18 23:38:35,577 - INFO - ==================================================
+2025-09-18 23:38:35,577 - INFO - Calentando funciones de Numba para evitar conflictos en paralelo...
+2025-09-18 23:38:40,181 - INFO - Calentamiento de Numba completado.
+2025-09-18 23:38:40,198 - INFO - MODO REANUDACIÓN: Reanudando sesión incompleta '20250918_233206_desde_punto_0'.
+2025-09-18 23:38:40,221 - INFO - Validando datos y extrayendo metadatos del raster...
+2025-09-18 23:38:40,224 - INFO - Verificando puntos contra la máscara...
+2025-09-18 23:38:40,225 - INFO - VERIFICACIÓN SUPERADA.
+2025-09-18 23:38:40,225 - CRITICAL - ¡ANÁLISIS CANCELADO! El punto de origen con ID '0' no se encontró en 'id'.
+2025-09-18 23:38:40,225 - CRITICAL - IDs disponibles: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+2025-09-18 23:38:40,225 - CRITICAL - Error fatal en el proceso principal: 'NoneType' object is not subscriptable
+Traceback (most recent call last):
+  File "C:\Users\Victor\AppData\Local\Temp\ipykernel_1864\2331616489.py", line 288, in <module>
+    start_pixel_hr = world_to_pixel(src.transform, origin_coords[0], origin_coords[1])
+                                                   ~~~~~~~~~~~~~^^^
+TypeError: 'NoneType' object is not subscriptable
+2025-09-18 23:38:40,226 - INFO - ================== EJECUCIÓN FINALIZADA ==================
+
+
+2025-09-18 23:38:52,797 - INFO - ==================================================
+2025-09-18 23:38:52,797 - INFO - INICIANDO NUEVA EJECUCIÓN PARALELA (UNO A TODOS)
+2025-09-18 23:38:52,797 - INFO - ==================================================
+2025-09-18 23:38:52,797 - INFO - Calentando funciones de Numba para evitar conflictos en paralelo...
+2025-09-18 23:38:57,393 - INFO - Calentamiento de Numba completado.
+2025-09-18 23:38:57,411 - INFO - MODO REANUDACIÓN: Reanudando sesión incompleta '20250918_233206_desde_punto_0'.
+2025-09-18 23:38:57,434 - INFO - Validando datos y extrayendo metadatos del raster...
+2025-09-18 23:38:57,437 - INFO - Verificando puntos contra la máscara...
+2025-09-18 23:38:57,437 - INFO - VERIFICACIÓN SUPERADA.
+2025-09-18 23:38:57,437 - INFO - Origen Fijo: Punto ID 1 -> Píxel (121, 58)
+2025-09-18 23:38:57,438 - INFO - Se procesarán 13 rutas pendientes en paralelo.
+2025-09-18 23:39:22,664 - INFO - Proceso paralelo completado en 25.23 segundos.
+2025-09-18 23:39:22,664 - INFO - RESUMEN: 13 de 13 rutas calculadas con éxito.
+2025-09-18 23:39:22,664 - INFO - 
+--- Reporte de Rendimiento ---
+2025-09-18 23:39:22,664 - INFO - Uso promedio de CPU: 56.38%
+2025-09-18 23:39:22,665 - INFO - Pico de uso de Memoria: 2824.73 MB
+2025-09-18 23:39:22,665 - INFO - ================== EJECUCIÓN FINALIZADA ==================
+
+

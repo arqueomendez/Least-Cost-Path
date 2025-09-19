@@ -11,6 +11,7 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
 - Exporta los resultados como shapefiles compatibles con SIG.
 - Incluye scripts de visualización para comparar rutas y analizar resultados.
 - Es posible correr el software tanto directamente en un ejecutable directo en Python como mediante Jupyter Notebook.
+- Utiliza método de paralelización con joblib.
 
 ## Estructura y estado actual del proyecto
 
@@ -25,10 +26,8 @@ Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cál
    - `__init__.py`: Inicialización del paquete.
 
 ### Archivos principales
-- **`lcp.py`**: Script ejecutable que orquesta el análisis completo fuera de Jupyter.
-- **`LCP_N2N.ipynb`**: Notebooks para ejecutar el análisis de todos a todos los puntos, visualizar resultados y probar variantes.
-- **`LCP_base.ipynb`**: Notebooks para ejecutar el análisis de un punto a todos, visualizar resultados y probar variantes.
-- **`LCP_VSH.py`**: Script alternativo para flujos personalizados o pruebas.
+- **`LCP_N2N_parallel.ipynb`**: Notebooks paralelizado para ejecutar el análisis de todos a todos los puntos, visualizar resultados y probar variantes.
+- **`LCP_N2N_base.ipynb`**: Notebooks para ejecutar el análisis de un punto a todos, visualizar resultados y probar variantes.
 - **`pyproject.toml`**: Configuración y dependencias del proyecto.
 - **`uv.lock`**: Bloqueo de versiones de dependencias.
 - **`LICENSE`**: Licencia de uso (CC BY-NC 4.0).
@@ -53,6 +52,7 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 - `scikit-image`
 - `shapely`
 - `tqdm`
+- `joblib`
 
 Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálculo de rutas, optimización, visualización y ejecución en notebooks.
 
@@ -94,7 +94,7 @@ Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálcu
    
    - **Con uv**:
    ```sh
-   uv add -r pyproject.toml
+   uv sync
    ```
 
    - **Con pip**:
