@@ -30,10 +30,6 @@ def run_analysis(config):
     # --- Configuración de la sesión y reanudación ---
     os.makedirs(config.BASE_PROCESSING_FOLDER, exist_ok=True)
     main_log = logging.getLogger("MasterLogger")
-    
-    # --- [MODIFICACIÓN] Pasar el objeto config completo a prepare_tasks ---
-    # Esto permite a la función acceder a todas las rutas y parámetros necesarios,
-    # incluyendo la ruta de la máscara.
     all_possible_tasks = tasks.prepare_tasks(config, main_log)
     
     session_to_resume = None
@@ -77,19 +73,19 @@ def run_analysis(config):
         session_log_path = os.path.join(SESSION_OUTPUT_DIR, "registro_de_procesamiento.log")
         session_log = logging.getLogger("SessionLogger"); session_log.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        # Limpiar manejadores previos para evitar duplicación de logs en notebooks
         if session_log.hasHandlers():
             session_log.handlers.clear()
         session_fh = logging.FileHandler(session_log_path, mode='a'); session_fh.setFormatter(formatter); session_log.addHandler(session_fh)
 
-        # --- [MODIFICACIÓN] Añadir la ruta de la máscara a la configuración del worker ---
+        # --- [MODIFICACIÓN] Añadir el nuevo parámetro a la configuración del worker ---
         worker_config = {
             'cost_raster_path': config.COST_RASTER_PATH,
-            'mask_shapefile_path': config.MASK_SHAPEFILE_PATH, # <-- AÑADIDO
+            'mask_shapefile_path': config.MASK_SHAPEFILE_PATH,
             'session_output_dir': SESSION_OUTPUT_DIR,
             'downsampling_factors': config.DOWNSAMPLING_FACTORS,
             'corridor_buffer_pixels': config.CORRIDOR_BUFFER_PIXELS,
             'heuristic_weight': config.HEURISTIC_WEIGHT,
+            'TILE_EDGE_BUFFER': config.TILE_EDGE_BUFFER # <-- AÑADIDO
         }
         full_tasks = [(task, worker_config) for task in tasks_to_run]
         
@@ -124,5 +120,4 @@ def run_analysis(config):
         main_log.info(f"Uso promedio de CPU: {avg_cpu:.2f}%")
         main_log.info(f"Pico de uso de Memoria: {peak_mem:.2f} MB")
         
-    # Devolver la ruta del directorio de la sesión para que el notebook pueda usarla
     return SESSION_OUTPUT_DIR

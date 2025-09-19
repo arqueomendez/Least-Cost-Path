@@ -1,4 +1,4 @@
-# lcp_network/worker.py
+# lcp_parallel_tile/worker.py
 
 import os
 import numpy as np
@@ -8,7 +8,10 @@ from . import geoutils
 from . import pathfinder
 
 def tile_worker(task, config):
-    tile_id = task['tile_id']; window = task['window']; border_nodes = task['border_nodes']
+    tile_id = task['tile_id']
+    window = task['window']
+    border_nodes = task['border_nodes']
+    
     try:
         with rasterio.open(config['cost_raster_path']) as src:
             tile_data = src.read(1, window=window)
@@ -17,38 +20,56 @@ def tile_worker(task, config):
             res = (abs(src.transform.a), abs(src.transform.e))
             crs = src.crs
 
-            # --- [MODIFICACIÓN] Crear máscara rasterizada para el tile ---
-            search_mask_hr = None
-            if config['mask_shapefile_path']:
-                # Creamos una máscara que se alinea perfectamente con el tile que hemos leído
-                search_mask_hr = geoutils.create_mask_from_vector(config['mask_shapefile_path'], src, window=window)
-            
-            # Si no hay máscara, creamos una que permite todo el espacio
-            if search_mask_hr is None:
-                search_mask_hr = np.ones_like(tile_data, dtype=bool)
+        # --- [INICIO DE LÓGICA DE MÁSCARA MEJORADA] ---
+        
+        # 1. Crear la máscara geográfica principal (si existe)
+        mask_hr_geo = None
+        if config.get('mask_shapefile_path'):
+            mask_hr_geo = geoutils.create_mask_from_vector(config['mask_shapefile_path'], src, window=window)
+        if mask_hr_geo is None:
+            mask_hr_geo = np.ones_like(tile_data, dtype=bool)
 
-        nodes_list = list(border_nodes.items()); num_rutas_calculadas = 0
+        # 2. Crear la máscara de borde interna para evitar artefactos
+        buffer_size = config.get('TILE_EDGE_BUFFER', 1)
+        internal_buffer_mask = np.ones_like(tile_data, dtype=bool)
+        internal_buffer_mask[:buffer_size, :] = False  # Borde superior
+        internal_buffer_mask[-buffer_size:, :] = False # Borde inferior
+        internal_buffer_mask[:, :buffer_size] = False  # Borde izquierdo
+        internal_buffer_mask[:, -buffer_size:] = False # Borde derecho
+
+        # 3. Combinar ambas máscaras para obtener la máscara de búsqueda final
+        search_mask_hr = np.logical_and(mask_hr_geo, internal_buffer_mask)
+        
+        # --- [FIN DE LÓGICA DE MÁSCARA MEJORADA] ---
+
+        nodes_list = list(border_nodes.items())
+        num_rutas_calculadas = 0
+        
         for i in range(len(nodes_list)):
             for j in range(i + 1, len(nodes_list)):
-                id_start, start_pixel_hr = nodes_list[i]; id_end, end_pixel_hr = nodes_list[j]
+                id_start, start_pixel_hr = nodes_list[i]
+                id_end, end_pixel_hr = nodes_list[j]
                 
                 path_found_lr, path_pixels_lr, successful_factor, trans_low = False, None, None, None
                 for factor in config['downsampling_factors']:
                     cost_lr = geoutils.create_low_res_data(tile_data, factor)
-                    # --- [MODIFICACIÓN] Usar máscara de baja resolución ---
+                    # La máscara de baja resolución ahora también incluye el buffer interno
                     mask_lr = search_mask_hr[::factor, ::factor]
-                    trans_lr = tile_transform * tile_transform.scale(factor, factor); dx_lr, dy_lr = res[0] * factor, res[1] * factor
-                    start_lr = (start_pixel_hr[0] // factor, start_pixel_hr[1] // factor); end_lr = (end_pixel_hr[0] // factor, end_pixel_hr[1] // factor)
+                    trans_lr = tile_transform * tile_transform.scale(factor, factor)
+                    dx_lr, dy_lr = res[0] * factor, res[1] * factor
+                    start_lr = (start_pixel_hr[0] // factor, start_pixel_hr[1] // factor)
+                    end_lr = (end_pixel_hr[0] // factor, end_pixel_hr[1] // factor)
                     
                     found, came_from_lr, _ = pathfinder.a_star_numba_compiled(cost_lr, nodata, start_lr, end_lr, dx_lr, abs(dy_lr), config['heuristic_weight'], mask_lr)
                     if found:
                         path_found_lr, successful_factor, trans_low = True, factor, trans_lr
-                        path_pixels_lr = pathfinder.reconstruct_path_pixels_numba(came_from_lr, start_lr, end_lr); break
+                        path_pixels_lr = pathfinder.reconstruct_path_pixels_numba(came_from_lr, start_lr, end_lr)
+                        break
                 
                 path_found_hr, came_from_hr = False, None
                 if path_found_lr:
                     corridor_mask = geoutils.create_search_corridor(path_pixels_lr, tile_data.shape, successful_factor, config['corridor_buffer_pixels'])
-                    # --- [MODIFICACIÓN] La máscara final es la intersección del corredor y la máscara principal ---
+                    # La máscara final es la intersección del corredor Y la máscara de búsqueda principal
                     final_mask = np.logical_and(corridor_mask, search_mask_hr)
                     path_found_hr, came_from_hr, _ = pathfinder.a_star_numba_compiled(tile_data, nodata, start_pixel_hr, end_pixel_hr, res[0], abs(res[1]), config['heuristic_weight'], final_mask)
                 
@@ -59,4 +80,5 @@ def tile_worker(task, config):
                     num_rutas_calculadas += 1
 
         return ("Éxito", tile_id, num_rutas_calculadas)
-    except Exception as e: return ("Error", tile_id, str(e))
+    except Exception as e:
+        return ("Error", tile_id, str(e))
