@@ -165,20 +165,6 @@ El flujo de trabajo implementado en el notebook `LCP_base.ipynb` sigue una metod
 - Se recomienda usar rutas relativas para facilitar la portabilidad del proyecto.
 - El notebook incluye manejo de errores para archivos de entrada y proyecciones.
 
-
-## Licencia y atribución
-Este software se distribuye bajo una licencia de atribución, uso no comercial y compartida:
-
-- Puedes modificar y compartir el código libremente, siempre y cuando:
-	- No lo utilices con fines comerciales ni en productos o servicios comerciales.
-	- Mantengas esta licencia y la sección de atribución en cualquier copia o derivado.
-	- Cites explícitamente el siguiente texto en cualquier uso, publicación o derivado:
-
-		> "Least-Cost-Path (LCP) desarrollado por Víctor Méndez, 2025."
-
-- El uso en investigación, docencia y proyectos personales está permitido.
-- Para cualquier uso comercial, se debe solicitar autorización expresa al autor.
-
 ## Autoría
 Desarrollado por Víctor Méndez, con asistencia de Gemini 2.5 Pro.
 
