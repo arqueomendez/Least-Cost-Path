@@ -1,15 +1,33 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
+title: Least Cost Path
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
 authors:
-  - family-names: "Méndez"
-    given-names: "Víctor" # Reemplazar con el nombre real del autor
-    orcid: "https://orcid.org/0000-0002-3453-3708" # Opcional, pero recomendado
-title: "Least-Cost-Path: A Python tool for Least Cost Path analysis in archaeology"
-date-released: 2025-09-18 # Fecha de la publicación o del último cambio importante
-repository-code: "https://github.com/arqueomendez/Least-Cost-Path"
+  - given-names: Víctor
+    family-names: Méndez
+    email: victor.mendez@uc.cl
+    orcid: 'https://orcid.org/0000-0002-3453-3708'
+repository-code: 'https://github.com/arqueomendez/Least-Cost-Path'
+abstract: >-
+  Least-Cost-Path (LCP) es un software de análisis espacial
+  avanzado para el cálculo de rutas de menor coste sobre
+  superficies raster, utilizando algoritmos jerárquicos y
+  optimizados. Permite encontrar rutas óptimas entre puntos
+  o entre un punto y todos los demás, considerando
+  superficies de fricción y  estricciones espaciales.
+  Least-Cost-Path ha sido desarrollado para ser utilizado en
+  arqueología, con la finalidad de realizar análisis de
+  movimientos en diversos tipos de espacios. La superficie
+  de raster a partir del cual se realiza el cálculo debe ser
+  considerado un modelo teórico que contiene el coste o
+  fricción para desplazarse entre los pixeles.
 keywords:
-  - "Least Cost Path"
-  - "Archaeology"
-  - "GIS"
-  - "Python"
-license: CC BY-NC 4.0
+  - Least-Cost-Path
+  - Short Path
+license: CC-BY-NC-4.0
+version: v0.0.1
