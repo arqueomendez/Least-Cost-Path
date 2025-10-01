@@ -14,7 +14,7 @@ authors:
     orcid: 'https://orcid.org/0000-0002-3453-3708'
 repository-code: 'https://github.com/arqueomendez/Least-Cost-Path'
 abstract: >-
-  Least-Cost-Path (LCP) es un software de análisis espacial
+  Least-Cost-Path (LCP) es un software de análisis espacial 
   avanzado para el cálculo de rutas de menor coste sobre
   superficies raster, utilizando algoritmos jerárquicos y
   optimizados. Permite encontrar rutas óptimas entre puntos

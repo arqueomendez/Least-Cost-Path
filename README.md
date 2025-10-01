@@ -1,5 +1,7 @@
 # Least-Cost-Path
 
+[![DOI](https://zenodo.org/badge/1051193732.svg)](https://doi.org/10.5281/zenodo.17172977)
+
 ## Descripción
 Least-Cost-Path (LCP) es un software de análisis espacial avanzado para el cálculo de rutas de menor coste sobre superficies raster, utilizando algoritmos jerárquicos y optimizados. Permite encontrar rutas óptimas entre puntos o entre un punto y todos los demás, considerando superficies de fricción y restricciones espaciales. Least-Cost-Path ha sido desarrollado para ser utilizado en arqueología, con la finalidad de realizar análisis de movimientos en diversos tipos de espacios. La superficie de raster a partir del cual se realiza el cálculo debe ser considerado un modelo teórico que contiene el coste o fricción para desplazarse entre los pixeles. 
 
@@ -90,11 +92,18 @@ Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálcu
      curl -LsSf https://astral.sh/uv/install.sh | sh
      ```
 
-2. Instala todas las dependencias del proyecto usando:
+3. Clona el repositorio usando:
+   
+   ```sh
+   git clone https://github.com/arqueomendez/Least-Cost-Path.git
+   cd Least-Cost-Path
+   ```
+
+4. Instala todas las dependencias del proyecto usando:
    
    - **Con uv**:
    ```sh
-   uv add -r pyproject.toml
+   uv sync
    ```
 
    - **Con pip**:
@@ -102,13 +111,13 @@ Estas cubren la carga y manejo de datos espaciales, procesamiento raster, cálcu
    pip install -r requirements.txt
    ```
 
-3. Inicia Jupyter Lab:
+5. Inicia Jupyter Lab:
    
    ```sh
-   jupyter lab
+   uv run jupyter lab
    ```
 
-4. Abre y ejecuta el notebook `LCP.ipynb`.
+6. Abre y ejecuta el notebook `LCP.ipynb`.
 
 ## Uso básico
 1. Prepara los archivos de entrada:
@@ -165,10 +174,23 @@ El flujo de trabajo implementado en el notebook `LCP_base.ipynb` sigue una metod
 - Se recomienda usar rutas relativas para facilitar la portabilidad del proyecto.
 - El notebook incluye manejo de errores para archivos de entrada y proyecciones.
 
-## Autoría
-Desarrollado por Víctor Méndez, con asistencia de Gemini 2.5 Pro.
+## Contribución
 
-## How to Cite
+¡Contribuciones bienvenidas! Puedes ayudar en:
+- Optimización de rendimiento
+- Documentación y tutoriales
+
+## Licencia
+
+Este proyecto está licenciado bajo **Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)**.
+
+- Puedes usar, modificar y compartir el software libremente **solo para fines no comerciales**.
+- Es obligatorio citar el proyecto y a los autores originales.
+- Para uso comercial, contacta a los autores.
+
+Ver el archivo LICENSE para detalles completos.
+
+## Cita y Autores
 
 If you use this software in your research, please cite it as follows:
 
@@ -179,3 +201,9 @@ If you use this software in your research, please cite it as follows:
   url = {https://github.com/arqueomendez/Least-Cost-Path},
   year = {2025}
 }
+
+## Soporte y Comunidad
+
+- Issues: Reporta bugs y solicita mejoras en GitHub Issues
+- Documentación: Consulta la documentación técnica en `docs/`
+- Comunidad: Únete a foros y discusiones científicas
