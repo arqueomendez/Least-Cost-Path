@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1026,6 +1026,7 @@ dependencies = [
     { name = "psutil" },
     { name = "rasterio" },
     { name = "scikit-image" },
+    { name = "scipy" },
     { name = "shapely" },
     { name = "tqdm" },
 ]
@@ -1043,6 +1044,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "rasterio", specifier = ">=1.4.3" },
     { name = "scikit-image", specifier = ">=0.25.2" },
+    { name = "scipy", specifier = ">=1.16.1" },
     { name = "shapely", specifier = ">=2.1.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
