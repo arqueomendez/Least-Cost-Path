@@ -8,15 +8,14 @@ from rasterio.features import rasterize
 from skimage.draw import disk
 from shapely.geometry import shape
 
+
 def world_to_pixel(transform, x, y):
     """
-    Convierte coordenadas del mundo a píxel (fila, columna).
-    --- VERSIÓN CORREGIDA Y SIMPLIFICADA ---
+    Converts world coordinates to pixel (row, column) using the raster transform.
     """
-    # rasterio.transform.rowcol es el método canónico y seguro para esta conversión.
-    # Devuelve (fila, columna) directamente. No se necesita ningún operador '~'.
     row, col = rasterio.transform.rowcol(transform, x, y)
     return int(row), int(col)
+
 
 def create_search_corridor(path_low_res, high_res_shape, factor, buffer_pixels):
     """
@@ -25,13 +24,14 @@ def create_search_corridor(path_low_res, high_res_shape, factor, buffer_pixels):
     corridor_mask = np.zeros(high_res_shape, dtype=bool)
     if path_low_res is None or len(path_low_res) == 0:
         return corridor_mask
-    
+
     for r_low, c_low in path_low_res:
         r_high = int(r_low * factor + factor / 2)
         c_high = int(c_low * factor + factor / 2)
         rr, cc = disk((r_high, c_high), buffer_pixels, shape=high_res_shape)
         corridor_mask[rr, cc] = True
     return corridor_mask
+
 
 def create_mask_from_vector(vector_path, raster_src):
     """
@@ -42,10 +42,13 @@ def create_mask_from_vector(vector_path, raster_src):
     repaired_count = 0
     with fiona.open(vector_path, "r") as vf:
         if vf.crs != raster_src.crs:
-            raise ValueError(f"Discrepancia de CRS. Raster: {raster_src.crs}, Vector: {vf.crs}")
+            raise ValueError(
+                f"Discrepancia de CRS. Raster: {raster_src.crs}, Vector: {vf.crs}"
+            )
         for feature in vf:
-            if not feature or not feature.get('geometry'): continue
-            geom = shape(feature['geometry'])
+            if not feature or not feature.get("geometry"):
+                continue
+            geom = shape(feature["geometry"])
             if geom.is_valid and not geom.is_empty:
                 geometries_to_rasterize.append(geom)
             elif not geom.is_valid:
@@ -54,9 +57,18 @@ def create_mask_from_vector(vector_path, raster_src):
                     geometries_to_rasterize.append(repaired_geom)
                     repaired_count += 1
     if repaired_count > 0:
-        print(f"  ADVERTENCIA: Se han reparado {repaired_count} geometrías inválidas en el archivo de máscara.")
+        print(
+            f"  ADVERTENCIA: Se han reparado {repaired_count} geometrías inválidas en el archivo de máscara."
+        )
     if not geometries_to_rasterize:
         raise ValueError("El archivo de máscara no contiene geometrías válidas.")
-    mask = rasterize(geometries_to_rasterize, out_shape=raster_src.shape, transform=raster_src.transform, fill=0, all_touched=True, dtype=np.uint8)
+    mask = rasterize(
+        geometries_to_rasterize,
+        out_shape=raster_src.shape,
+        transform=raster_src.transform,
+        fill=0,
+        all_touched=True,
+        dtype=np.uint8,
+    )
     print("Máscara creada exitosamente.")
     return mask.astype(bool)
