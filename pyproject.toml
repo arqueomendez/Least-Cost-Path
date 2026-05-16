@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datashader>=0.19.0",
     "fiona>=1.10.1",
     "geopandas>=1.1.1",
     "joblib>=1.5.2",
