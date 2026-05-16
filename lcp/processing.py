@@ -3,9 +3,7 @@
 import numpy as np
 import fiona
 import rasterio
-from rasterio.enums import Resampling
 from rasterio.features import rasterize
-from skimage.draw import disk
 from shapely.geometry import shape
 
 
@@ -15,22 +13,6 @@ def world_to_pixel(transform, x, y):
     """
     row, col = rasterio.transform.rowcol(transform, x, y)
     return int(row), int(col)
-
-
-def create_search_corridor(path_low_res, high_res_shape, factor, buffer_pixels):
-    """
-    Crea una máscara de corredor dibujando discos alrededor de la ruta de baja resolución.
-    """
-    corridor_mask = np.zeros(high_res_shape, dtype=bool)
-    if path_low_res is None or len(path_low_res) == 0:
-        return corridor_mask
-
-    for r_low, c_low in path_low_res:
-        r_high = int(r_low * factor + factor / 2)
-        c_high = int(c_low * factor + factor / 2)
-        rr, cc = disk((r_high, c_high), buffer_pixels, shape=high_res_shape)
-        corridor_mask[rr, cc] = True
-    return corridor_mask
 
 
 def create_mask_from_vector(vector_path, raster_src):
