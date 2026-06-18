@@ -320,8 +320,11 @@ de seguridad del 20%.
 - Implementación: `shapely.get_coordinates` + `np.add.at` binning vectorizado en vez de `rasterio.features.rasterize`.
 - FFT via `scipy.fft` (MKL backend) en vez de `np.fft`.
 - **Georreferenciación**: usar `rasterio.transform.from_bounds(minx, miny, maxx, maxy, width, height)`.
-  NO usar `from_origin`. El `ceil` en width/height crea un desajuste de hasta ~18m con `from_origin`,
-  causando un desplazamiento sistemático al este del heatmap.
+  El pixel real del raster es `pixel_size_x = (maxx-minx)/width` y `pixel_size_y = (maxy-miny)/height`,
+  que NO es exactamente `HEATMAP_RES_M`. El binning numpy DEBE usar este mismo pixel_size, no
+  HEATMAP_RES_M, para que el grid de datos y el grid del raster coincidan exactamente.
+  Si se usa `HEATMAP_RES_M` distinto al pixel_size real, se genera un desplazamiento sistemático
+  que crece de oeste a este (y de norte a sur).
 - Salidas: GeoTIFF (`heatmap_<res>m_<bw>km_<kernel>.tif`) + PNG inline.
 - La convolución FFT sobre histograma rasterizado es matemáticamente idéntica al KDE punto-a-punto.
 
