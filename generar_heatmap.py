@@ -47,10 +47,11 @@ count_grid = np.zeros((height, width), dtype=np.float64)
 np.add.at(count_grid, (rows[valid], cols[valid]), 1)
 print(f"  Puntos binnados: {valid.sum():,} / {len(coords):,}")
 
-# Kernel
-radius_px = int(np.ceil(HEATMAP_BANDWIDTH_M / HEATMAP_RES_M))
+# Kernel (usando pixel_size real para coincidencia exacta con el grid)
+ps = (pixel_size_x + pixel_size_y) / 2.0
+radius_px = int(np.ceil(HEATMAP_BANDWIDTH_M / ps))
 y, x = np.ogrid[-radius_px:radius_px+1, -radius_px:radius_px+1]
-u = np.sqrt(x**2 + y**2) * HEATMAP_RES_M / HEATMAP_BANDWIDTH_M
+u = np.sqrt(x**2 + y**2) * ps / HEATMAP_BANDWIDTH_M
 if HEATMAP_KERNEL == "quartic":
     kernel = np.where(u <= 1, (15.0/16.0)*(1-u**2)**2, 0.0)
 elif HEATMAP_KERNEL == "gaussian":
@@ -61,7 +62,7 @@ elif HEATMAP_KERNEL == "uniform":
     kernel = np.where(u <= 1, 1.0, 0.0)
 else:
     raise ValueError(f"Kernel: {HEATMAP_KERNEL}")
-kernel = kernel / (np.sum(kernel) * HEATMAP_RES_M**2)
+kernel = kernel / (np.sum(kernel) * ps**2)
 print(f"  Kernel: {kernel.shape} px, bandwidth={HEATMAP_BANDWIDTH_M/1000:.0f}km")
 
 # FFT
