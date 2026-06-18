@@ -60,6 +60,10 @@ uv run ruff format --check lcp/pathfinder.py
 Antes de proponer un cambio, ejecuta `ruff check` y `ruff format --check` sobre
 los archivos modificados. No introduzcas errores de lint nuevos.
 
+> **Nota**: Si `uv run ruff check` falla con `program not found`, usa
+> `uv tool run ruff check ...` o instala ruff globalmente:
+> `uv tool install ruff`
+
 ---
 
 ## 3. Tests
@@ -67,7 +71,7 @@ los archivos modificados. No introduzcas errores de lint nuevos.
 **No existe una suite de tests formal** en este repositorio. No hay directorio
 `tests/` ni archivos `test_*.py`.
 
-### Script de diagnóstico existente
+### Scripts de diagnóstico
 
 ```sh
 # Verifica que el patrón global + loky funcione en Windows
@@ -324,9 +328,16 @@ de seguridad del 20%.
   que NO es exactamente `HEATMAP_RES_M`. El binning numpy DEBE usar este mismo pixel_size, no
   HEATMAP_RES_M, para que el grid de datos y el grid del raster coincidan exactamente.
   Si se usa `HEATMAP_RES_M` distinto al pixel_size real, se genera un desplazamiento sistemático
-  que crece de oeste a este (y de norte a sur).
+  que crece de oeste a este (y de norte a sur). **Bug corregido en commit `dbd1595`.**
+- **FFT crop offset**: La convolución circular via FFT desplaza el resultado en `radius_px`
+  posiciones (`circular[n] = full_linear[(n-R) mod P]`). Para extraer la porción "same" se debe
+  usar `heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]`, no
+  `heatmap[radius_px:...]`. El offset incorrecto causaba que el pico del KDE apareciera en
+  `(2*R-1, 2*R-1)` en vez de `(R-1, R-1)`. **Bug corregido en commit `be6161f`.**
 - Salidas: GeoTIFF (`heatmap_<res>m_<bw>km_<kernel>.tif`) + PNG inline.
 - La convolución FFT sobre histograma rasterizado es matemáticamente idéntica al KDE punto-a-punto.
+- Script standalone: `generar_heatmap.py` — acepta argumentos CLI (`--res`, `--bw`, `--kernel`)
+  para procesar cualquier GPKG de puntos sin editar código.
 
 ---
 

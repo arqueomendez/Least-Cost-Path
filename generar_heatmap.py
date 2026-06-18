@@ -1,8 +1,14 @@
 """
 Generar heatmap KDE desde puntos densificados (GeoPackage).
-Uso:  uv run python generar_heatmap.py
+
+Uso:
+  uv run python generar_heatmap.py <path_al_gpkg> [--res 30] [--bw 10000] [--kernel quartic]
+
+Ejemplos:
+  uv run python generar_heatmap.py output/session_20260415_213517_Refactored/puntos_rutas_25m.gpkg
+  uv run python generar_heatmap.py output/session_20260415_213517_Refactored/puntos_rutas_25m.gpkg --res 50 --bw 5000 --kernel gaussian
 """
-import os, sys, time
+import os, sys, time, argparse
 import numpy as np
 import geopandas as gpd
 import rasterio
@@ -10,13 +16,19 @@ from rasterio.transform import from_bounds
 from shapely import get_coordinates
 from scipy.fft import rfft2, irfft2
 
-# ========== CONFIG ==========
-POINTS_PATH = r"output/session_20260415_213517_Refactored/puntos_rutas_25m.gpkg"
+parser = argparse.ArgumentParser(description="Generar heatmap KDE desde puntos densificados")
+parser.add_argument("points_path", help="Ruta al GeoPackage de puntos densificados")
+parser.add_argument("--res", type=float, default=30, help="Resolucion en metros (default: 30)")
+parser.add_argument("--bw", type=float, default=10000, help="Bandwidth KDE en metros (default: 10000)")
+parser.add_argument("--kernel", default="quartic", choices=["quartic","gaussian","triangular","uniform"],
+                    help="Tipo de kernel (default: quartic)")
+args = parser.parse_args()
+
+POINTS_PATH = args.points_path
 OUTPUT_DIR  = os.path.dirname(POINTS_PATH)
-HEATMAP_RES_M = 30
-HEATMAP_BANDWIDTH_M = 10000
-HEATMAP_KERNEL = "quartic"
-# ============================
+HEATMAP_RES_M = args.res
+HEATMAP_BANDWIDTH_M = args.bw
+HEATMAP_KERNEL = args.kernel
 
 print(f"Cargando puntos: {POINTS_PATH}")
 points_gdf = gpd.read_file(POINTS_PATH)

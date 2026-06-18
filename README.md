@@ -36,6 +36,8 @@ La herramienta calcula el conjunto completo de rutas entre todos los pares de pu
 
 - **`LCP_MCP_Geometric.ipynb`**: Notebook principal de ejecución paso a paso, visualización y exportación de resultados (9 celdas).
 - **`LCP_MCP_Geometric-retake.ipynb`**: Notebook alternativo para retomar resultados ya calculados y ejecutar solo celdas 8 y 9 (post-procesamiento).
+- **`generar_heatmap.py`**: Script CLI standalone para generar heatmap KDE desde cualquier GPKG de puntos densificados. Acepta `--res`, `--bw`, `--kernel`.
+- **`_diag_global.py`**: Script de diagnóstico para verificar que joblib loky funcione en Windows.
 - **`pyproject.toml`**: Configuración y dependencias del proyecto.
 - **`uv.lock`**: Bloqueo de versiones de dependencias.
 - **`requirements.txt`**: Lista de dependencias en formato pip.
@@ -116,6 +118,10 @@ Genera puntos cada `SPACING_M` metros (por defecto 25 m) sobre todas las rutas c
 
 ### Celda 9 — Mapa de calor (Kernel Density Estimation)
 Implementa KDE estilo QGIS con kernel Quartic sobre los puntos densificados. Parámetros configurables: `HEATMAP_RES_M` (resolución, 30 m), `HEATMAP_BANDWIDTH_M` (radio, 10 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). Usa numpy binning vectorizado + FFT (`scipy.fft`) para procesar 81M puntos en ~20–30 s. Salidas: GeoTIFF con metadatos + PNG inline.
+
+**Bugs corregidos en heatmap:**
+1. **Kernel con pixel_size real** (commit `dbd1595`): El kernel se construye con `pixel_size` medio en vez de `HEATMAP_RES_M`. Usar `HEATMAP_RES_M` para el kernel pero `pixel_size` para el binning genera un desplazamiento sistemático que crece de oeste a este.
+2. **FFT crop offset** (commit `be6161f`): La convolución circular via FFT desplaza el resultado. El crop correcto es `heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]`. El offset incorrecto hacia que el pico KDE apareciera en `(2R-1, 2R-1)` en vez de `(R-1, R-1)`.
 
 ## Dependencias
 
@@ -224,7 +230,9 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 - El ráster de coste debe estar en un CRS proyectado (p. ej. UTM) para que `length_m` sea significativo.
 - **Celda 8 (optimización)**: Usa `shapely.length` + `np.repeat` + `shapely.line_interpolate_point` vectorizado. Speedup: 20–50× sobre bucle Python (~3 min → ~5–10 s).
 - **Celda 9 (optimización)**: Reemplaza `rasterio.features.rasterize` por `shapely.get_coordinates` + `np.add.at` binning vectorizado, y `np.fft` por `scipy.fft` (MKL backend). Speedup: 50–100× sobre rasterize (~20 min → ~10–20 s).
-- **CRS en visualización**: Celda 6 ahora captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
+- **generar_heatmap.py**: Script CLI standalone. Uso: `uv run python generar_heatmap.py <path.gpkg> [--res 30] [--bw 10000] [--kernel quartic]`. El GeoTIFF se guarda en el mismo directorio que el GPKG de entrada.
+- **CRS en visualización**: Celda 6 captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
+- **_diag_global.py**: Script de diagnóstico para verificar que joblib + loky funcione correctamente en Windows.
 - **Datashader**: Instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
 
 ## Licencia y atribución
