@@ -38,17 +38,21 @@ else:
     mask_bounds = mask.total_bounds
 print()
 
-# 3. Cargar puntos densificados
+# 3. Cargar puntos densificados (metadata only - 22GB)
 pp = os.path.join(sess, "puntos_rutas_25m.gpkg")
 print("--- PUNTOS densificados ---")
 if not os.path.exists(pp):
     print(f"  NO ENCONTRADO: {pp}")
 else:
-    pts = gpd.read_file(pp)
-    print(f"  CRS:    {pts.crs}")
-    print(f"  Bounds: {pts.total_bounds}")
-    print(f"  Count:  {len(pts)}")
-    pt_bounds = pts.total_bounds
+    pts_crs = gpd.read_file(pp, rows=0).crs
+    # Leer bounds desde el gpkg sin cargar geometrias
+    import fiona
+    with fiona.open(pp) as f:
+        pt_bounds = f.bounds
+        pt_count = len(f)
+    print(f"  CRS:    {pts_crs}")
+    print(f"  Bounds: {pt_bounds}")
+    print(f"  Count:  {pt_count}")
 
     if mask_bounds is not None:
         print(f"  Diferencia vs mask (minx,miny,maxx,maxy):")
@@ -77,36 +81,26 @@ else:
                 print(f"    Diferencia maxy vs mask:  {top - mask_bounds[3]:.2f} m")
 print()
 
-# 5. Verificacion: la linea de puntos debe caer DENTRO del poligono mascara
+# 5. Verificacion rapida: CRS de puntos vs mascara (sin sjoin)
 if mask_bounds is not None and os.path.exists(pp):
-    print("--- VERIFICACION: puntos dentro de mask? ---")
-    mask_gdf = gpd.read_file(MASK_PATH)
-    pts2 = gpd.read_file(pp)
-    # CRS check
-    if pts2.crs != mask_gdf.crs:
-        print(f"  CRS MISMATCH! Puntos: {pts2.crs}, Mask: {mask_gdf.crs}")
+    print("--- VERIFICACION RAPIDA: CRS puntos vs mask ---")
+    mask_crs = gpd.read_file(MASK_PATH, rows=0).crs
+    pts_crs = gpd.read_file(pp, rows=0).crs
+    print(f"  CRS puntos: {pts_crs}")
+    print(f"  CRS mask:   {mask_crs}")
+    if pts_crs != mask_crs:
+        print(f"  *** CRS MISMATCH! ***")
     else:
-        # Quick sample: check 1000 random points
-        sample = pts2.sample(min(1000, len(pts2)), random_state=42)
-        inside = gpd.sjoin(sample, mask_gdf, predicate="within")
-        ratio = len(inside) / len(sample) * 100
-        print(f"  Puntos dentro del poligono: {ratio:.1f}% (n={len(sample)})")
-
-        if ratio < 90:
-            print(f"  *** ALERTA: muchos puntos fuera del poligono! Posible shift o CRS incorrecto")
-            # Show some outside points
-            outside = sample[~sample.index.isin(inside.index)]
-            print(f"  Primeros 5 puntos fuera del poligono:")
-            for _, row in outside.head(5).iterrows():
-                print(f"    ({row.geometry.x:.1f}, {row.geometry.y:.1f})")
+        print(f"  CRS OK: coinciden")
 print()
 
 # 6. Recalcular el extent del heatmap con el codigo actual del notebook
 if os.path.exists(pp):
     print("--- SIMULACION: extent del notebook ---")
-    pts3 = gpd.read_file(pp)
+    with fiona.open(pp) as f:
+        b = f.bounds
     HEATMAP_BANDWIDTH_M = 10000
-    minx, miny, maxx, maxy = pts3.total_bounds
+    minx, miny, maxx, maxy = b
     minx -= HEATMAP_BANDWIDTH_M
     miny -= HEATMAP_BANDWIDTH_M
     maxx += HEATMAP_BANDWIDTH_M
