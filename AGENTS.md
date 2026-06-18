@@ -1,5 +1,7 @@
 # AGENTS.md — LCP_MCP_Geometric
 
+**Workspace:** `G:\LCP_MCP_Geometric` (único directorio válido)
+
 Instrucciones para agentes de IA que operen en este repositorio.
 Este archivo tiene precedencia sobre el comportamiento por defecto del agente.
 
@@ -18,6 +20,16 @@ uv sync
 
 # Activar el entorno (macOS / Linux)
 source .venv/bin/activate
+```
+
+### 1.1 Windows — codificación de caracteres
+
+En Windows, la consola usa `cp1252` que NO soporta caracteres Unicode como `→`, `Δ`, `√`, etc.
+**No uses caracteres Unicode en prints ni f-strings.** Prefiere ASCII puro:
+
+```python
+# MAL: print(f"Δx={dx:.1f}")  # UnicodeEncodeError en Windows
+# BIEN: print(f"dx={dx:.1f}")
 ```
 
 Nunca edites `uv.lock` a mano. Añade dependencias con `uv add <paquete>` y confirma
@@ -307,6 +319,9 @@ de seguridad del 20%.
 - Kernel por defecto: Quartic (QGIS default). Opciones: quartic, gaussian, triangular, uniform.
 - Implementación: `shapely.get_coordinates` + `np.add.at` binning vectorizado en vez de `rasterio.features.rasterize`.
 - FFT via `scipy.fft` (MKL backend) en vez de `np.fft`.
+- **Georreferenciación**: usar `rasterio.transform.from_bounds(minx, miny, maxx, maxy, width, height)`.
+  NO usar `from_origin`. El `ceil` en width/height crea un desajuste de hasta ~18m con `from_origin`,
+  causando un desplazamiento sistemático al este del heatmap.
 - Salidas: GeoTIFF (`heatmap_<res>m_<bw>km_<kernel>.tif`) + PNG inline.
 - La convolución FFT sobre histograma rasterizado es matemáticamente idéntica al KDE punto-a-punto.
 
