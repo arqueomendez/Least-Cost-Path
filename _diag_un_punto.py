@@ -82,7 +82,7 @@ fft_grid = rfft2(count_padded)
 fft_kernel = rfft2(kernel_padded)
 fft_result = fft_grid * fft_kernel
 heatmap = irfft2(fft_result, s=count_padded.shape)
-heatmap = heatmap[radius_px:radius_px+height, radius_px:radius_px+width]
+heatmap = heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]
 
 # Encontrar el pico del KDE
 peak_row, peak_col = np.unravel_index(np.argmax(heatmap), heatmap.shape)

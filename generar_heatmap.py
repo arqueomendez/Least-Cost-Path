@@ -71,7 +71,7 @@ count_padded = np.pad(count_grid, pad_width=radius_px, mode='constant')
 kp = np.zeros_like(count_padded)
 kp[:kernel.shape[0], :kernel.shape[1]] = kernel
 heatmap = irfft2(rfft2(count_padded) * rfft2(kp), s=count_padded.shape)
-heatmap = heatmap[radius_px:radius_px+height, radius_px:radius_px+width]
+heatmap = heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]
 print(f"  Densidad: {heatmap.min():.6f} a {heatmap.max():.6f}")
 
 # Guardar GeoTIFF
