@@ -6,7 +6,7 @@ import pyogrio
 import rasterio
 
 MASK_PATH = r"C:\Users\LAV\Desktop\Proyecto Vannia\QGIS\Poligono ampliado AE.gpkg"
-ORIGIN_PATH = r"C:\Users\LAV\Desktop\Proyecto Vannia\QGIS\puntos del perimetro del poligono.gpkg"
+ORIGIN_PATH = r"C:\Users\LAV\Desktop\Proyecto Vannia\Proceso\coste\puntos del perimetro del poligono.gpkg"
 
 outdir = os.path.join(os.getcwd(), "output")
 sessions = sorted([d for d in os.listdir(outdir) if d.startswith("session_")],
