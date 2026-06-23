@@ -7,6 +7,9 @@ def build_route_record(pixel_path, transform, origin_id, dest_id, cost_total):
     """
     Converts a pixel path to a dict with geometry and attributes.
     Returns None if the path is invalid or too short.
+
+    Nota: 'length_m' asume un CRS métrico proyectado (p. ej. UTM). En un CRS
+    geográfico la longitud saldría en grados.
     """
     if pixel_path is None or len(pixel_path) < 2:
         return None

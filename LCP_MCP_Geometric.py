@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[3]:
 
 
 # ==============================================================================
@@ -36,7 +36,7 @@ import lcp.postprocessing as postp
 print("Módulos cargados exitosamente.")
 
 
-# In[2]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -45,14 +45,8 @@ print("Módulos cargados exitosamente.")
 
 def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
     """
-    Estima cuantos workers paralelos caben en la RAM disponible para cada fase.
-
-    Fase 1 (MCP): cada worker necesita raster (float64) + costs (float64) +
-                  traceback (int8).  Aprox. 2.125x el tamaño del raster en bytes.
-
-    Fase 2 (reconstruccion): cada worker solo carga el traceback comprimido desde
-                  disco (~30-80 MB) + buffer de path (~200 KB).  Usa el doble de
-                  CPUs logicos para maximizar I/O.
+    Estima cuántos workers paralelos caben en la RAM disponible para cada fase.
+    (El traceback de skimage es int32, no int8; las estimaciones son conservadoras.)
     """
     import psutil
     import numpy as np
@@ -62,22 +56,18 @@ def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
     raster_bytes = np.prod(raster_shape) * np.dtype(raster_dtype).itemsize
 
     if phase == 1:
-        # MCP_Geometric internamente asigna: flat_costs (f64) + heap (f64) +
-        # heap structure (i16) + offsets (i64, 2xHxW) + traceback (i8).
-        # Mas la copia del raster que lee el worker (~1x).  Total real: ~5.5x raster.
+        # flat_costs (f64) + heap + offsets + traceback (i32) + copia del raster.
         mem_per_worker = raster_bytes * 5.5
         n_jobs = max(1, int(available_ram * 0.80 / mem_per_worker))
         n_cpu = psutil.cpu_count(logical=True) or 1
         n_jobs = min(n_jobs, n_cpu)
     else:
-        # Fase 2: traceback comprimido en disco -> mucho menos RAM
-        # 80 MB por worker (estimado conservador para traceback descomprimido)
+        # Fase 2: traceback comprimido en disco -> mucho menos RAM.
         mem_per_worker = 80 * 1024 * 1024
         n_jobs = max(1, int(available_ram * 0.80 / mem_per_worker))
         n_cpu = psutil.cpu_count(logical=True) or 1
         n_jobs = min(n_jobs, n_cpu * 2)
 
-    # --- AGREGAR ESTE BLOQUE ---
     if sys.platform == "win32":
         n_jobs = min(n_jobs, 61)   # límite de WaitForMultipleObjects en Windows
 
@@ -86,20 +76,36 @@ def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
 
 def warm_up_numba():
     """
-    Pre-compila reconstruct_path_from_traceback con Numba JIT usando datos de prueba.
-    Debe llamarse en cada proceso worker antes del bucle principal para evitar que
-    el primer origen real pague el costo de compilacion JIT.
+    Pre-compila reconstruct_path_from_traceback con Numba JIT usando datos de
+    prueba y, de paso, VERIFICA que el orden de offsets esperado por defecto
+    coincide con el del MCP de la versión instalada de scikit-image.
+
+    Con @njit(cache=True) en pathfinder, la compilación se guarda en disco y los
+    workers loky la reutilizan (no recompilan en su primer origen).
     """
-    print("Pre-compilando funcion Numba (warm-up)...")
-    dummy_raster = np.ones((10, 10), dtype=np.float64)
+    print("Pre-compilando función Numba (warm-up) y verificando offsets...")
+    import numpy as np
     from skimage.graph import MCP_Geometric
+
+    dummy_raster = np.ones((10, 10), dtype=np.float64)
     mcp = MCP_Geometric(dummy_raster, fully_connected=True)
     _, dummy_traceback = mcp.find_costs([(5, 5)])
-    pf.reconstruct_path_from_traceback(dummy_traceback, (5, 5), (2, 2))
+    offsets = np.asarray(mcp.offsets, dtype=np.int32)
+
+    # Red de seguridad: si skimage reordenara los offsets, el respaldo por defecto
+    # quedaría inválido. Avisamos en lugar de generar rutas erróneas en silencio.
+    if not np.array_equal(offsets, pf.DEFAULT_OFFSETS):
+        print(
+            "  ADVERTENCIA: el orden de mcp.offsets difiere de DEFAULT_OFFSETS. "
+            "Se usarán los offsets reales guardados en cada .npz (esto es correcto), "
+            "pero revisa pf.DEFAULT_OFFSETS para compatibilidad con .npz antiguos."
+        )
+
+    pf.reconstruct_path_from_traceback(dummy_traceback, (5, 5), (2, 2), offsets)
     print("Warm-up completado.")
 
 
-# In[3]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -107,77 +113,72 @@ def warm_up_numba():
 # ==============================================================================
 # --- 1. Parámetros de Rutas ---
 BASE_DIR = os.getcwd()
-DATA_DIR = os.path.join(R"C:\Users\LAV\Desktop\Proyecto Vannia\Proceso\coste")
+DATA_DIR = R"C:\Users\LAV\Desktop\Proyecto Vannia\Proceso\coste"   # ruta directa
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')
 
-COST_RASTER_PATH = os.path.join(DATA_DIR, 'Coste 2.tif')
-ALL_POINTS_SHAPEFILE = os.path.join(R"C:\Users\LAV\Desktop\Proyecto Vannia\puntos poligono y sitios.gpkg")
+COST_RASTER_PATH = os.path.join(DATA_DIR, 'Coste.tif')
+ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'puntos del perimetro del poligono.gpkg')
 MASK_SHAPEFILE_PATH = R"C:\Users\LAV\Desktop\Proyecto Vannia\QGIS\Poligono ampliado AE.gpkg"
 ID_FIELD_NAME = 'fid'
 
 # --- 2. Opciones de Almacenamiento ---
-# Si es True, la carpeta phase1_tracebacks/ (5-13 GB) se conserva al terminar.
-# Si es False (recomendado), se elimina automáticamente al finalizar la Celda 6.
 KEEP_PHASE1_FILES = False
-
-# Verbosidad del análisis: True imprime detalles por ruta, False suprime el ruido.
 VERBOSE = False
 
-# Crear el directorio de salida inmediatamente después de definir su ruta.
-# Esto asegura que estará disponible para todas las celdas posteriores (5, 6, 7).
 try:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"Directorio de salida creado/verificado en: {OUTPUT_DIR}")
 except OSError as e:
     print(f"!! ERROR CRÍTICO !! No se pudo crear el directorio de salida. Error: {e}")
-    # Detener la ejecución si no se puede crear la carpeta
     raise
 
 print("Parámetros de configuración cargados. Los resultados se guardarán en:", OUTPUT_DIR)
 
 
-# In[4]:
+# In[ ]:
 
 
 # ==============================================================================
 # --- CELDA 4: VERIFICACIÓN DE COHERENCIA DE DATOS ---
 # ==============================================================================
+from pyproj import CRS  # comparación de CRS robusta entre clases fiona/rasterio
+
 print("\n--- VERIFICANDO LA COHERENCIA DE TODOS LOS DATOS DE ENTRADA ---")
 
-main_search_mask = None  # Inicializar la variable para que esté disponible globalmente en la celda
+main_search_mask = None
+invalid_point_ids = []
 
 try:
-    # --- Etapa 1: Comprobación de Sistemas de Coordenadas (CRS) ---
+    # --- Etapa 1: CRS ---
     print("--- Etapa 1: Comprobación de Sistemas de Coordenadas (CRS) ---")
-    
+
     with rasterio.open(COST_RASTER_PATH) as src:
-        raster_crs = src.crs
-    
+        raster_crs = CRS.from_user_input(src.crs)
+
     with fiona.open(ALL_POINTS_SHAPEFILE) as src:
-        points_crs = src.crs
+        points_crs = CRS.from_user_input(src.crs)
 
     print(f"  > CRS del Ráster: {raster_crs.to_string()}")
-    print(f"  > CRS de los Puntos: {fiona.crs.to_string(points_crs)}")
+    print(f"  > CRS de los Puntos: {points_crs.to_string()}")
 
     crs_errors = []
-    if raster_crs != points_crs:
+    if not raster_crs.equals(points_crs):
         crs_errors.append("El CRS de los PUNTOS no coincide con el del RÁSTER.")
-    
-    mask_crs = None
+
     if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
         with fiona.open(MASK_SHAPEFILE_PATH) as src:
-            mask_crs = src.crs
-        print(f"  > CRS de la Máscara: {fiona.crs.to_string(mask_crs)}")
-        if raster_crs != mask_crs:
+            mask_crs = CRS.from_user_input(src.crs)
+        print(f"  > CRS de la Máscara: {mask_crs.to_string()}")
+        if not raster_crs.equals(mask_crs):
             crs_errors.append("El CRS de la MÁSCARA no coincide con el del RÁSTER.")
-    
+
     if not crs_errors:
         print("¡Correcto! Todos los sistemas de coordenadas coinciden.")
-    
-    # --- Etapa 2: Comprobación de Superposición Espacial ---
+
+    # --- Etapa 2: Superposición espacial ---
     print("\n--- Etapa 2: Comprobación de Superposición Espacial ---")
-    
+
     with rasterio.open(COST_RASTER_PATH) as src:
         raster_bounds = src.bounds
         raster_box = box(*raster_bounds)
@@ -185,13 +186,16 @@ try:
     points_gdf = gpd.read_file(ALL_POINTS_SHAPEFILE)
     points_bounds = points_gdf.total_bounds
     points_box = box(*points_bounds)
-    
+
     print(f"  > Extensión del Ráster: {raster_bounds}")
     print(f"  > Extensión de los Puntos: {tuple(points_bounds)}")
 
     superposition_errors = []
     if not points_box.within(raster_box):
-        superposition_errors.append("La extensión de los PUNTOS no está completamente contenida dentro de la extensión del RÁSTER.")
+        superposition_errors.append(
+            "La extensión de los PUNTOS no está completamente contenida dentro de la "
+            "extensión del RÁSTER."
+        )
 
     if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
         mask_gdf = gpd.read_file(MASK_SHAPEFILE_PATH)
@@ -200,68 +204,67 @@ try:
             mask_box = box(*mask_bounds)
             print(f"  > Extensión de la Máscara: {tuple(mask_bounds)}")
             if not mask_box.intersects(raster_box):
-                superposition_errors.append("La extensión de la MÁSCARA no se superpone (intersecta) con la extensión del RÁSTER.")
-    
+                superposition_errors.append(
+                    "La extensión de la MÁSCARA no se superpone con la del RÁSTER."
+                )
+
     if not superposition_errors:
         print("¡Correcto! Todas las capas se superponen geográficamente.")
 
-    # --- Etapa 3: Creación y Validación Lógica de la Máscara y Puntos ---
-    print("\n--- Etapa 3: Creación y Validación Lógica Final (Máscara + Nodata + Puntos) ---")
-    
+    # --- Etapa 3: Máscara + nodata + validación de puntos ---
+    print("\n--- Etapa 3: Creación y Validación Lógica Final ---")
+
     with rasterio.open(COST_RASTER_PATH) as src:
-        # 3.1: Crear la máscara a partir del polígono vectorial
         if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
             vector_mask = proc.create_mask_from_vector(MASK_SHAPEFILE_PATH, src)
         else:
-            print("  ADVERTENCIA: No se proporcionó un archivo de máscara. Se usará toda la extensión del ráster.")
+            print("  ADVERTENCIA: Sin archivo de máscara. Se usará toda la extensión.")
             vector_mask = np.ones(src.shape, dtype=bool)
 
-        # 3.2: Crear una máscara a partir de los valores 'nodata' del ráster
         original_cost_data = src.read(1)
         nodata_value = src.nodata
         if nodata_value is not None:
             nodata_mask = (original_cost_data == nodata_value)
-            print(f"  > Se han detectado {np.sum(nodata_mask)} píxeles con valor 'nodata' en el ráster.")
+            print(f"  > {np.sum(nodata_mask)} píxeles con valor 'nodata' en el ráster.")
         else:
             nodata_mask = np.zeros(src.shape, dtype=bool)
-        
-        # 3.3: Combinar ambas para obtener la máscara de búsqueda final y definitiva
+
         main_search_mask = vector_mask & ~nodata_mask
-        
-        # 3.4: Cargar los puntos y validarlos contra la MÁSCARA FINAL
-        all_points_for_validation, _ = dl.load_points_as_dict(ALL_POINTS_SHAPEFILE, ID_FIELD_NAME)
-        invalid_point_ids = []
+
+        all_points_for_validation, _ = dl.load_points_as_dict(
+            ALL_POINTS_SHAPEFILE, ID_FIELD_NAME
+        )
         for point_id, coords in all_points_for_validation.items():
             row, col = rasterio.transform.rowcol(src.transform, coords[0], coords[1])
-            if not (0 <= row < src.height and 0 <= col < src.width) or not main_search_mask[row, col]:
+            if not (0 <= row < src.height and 0 <= col < src.width) \
+               or not main_search_mask[row, col]:
                 invalid_point_ids.append(str(point_id))
 
         if not invalid_point_ids:
-            print("¡Correcto! Todos los puntos están dentro del área de búsqueda válida final.")
-    
-    # --- Etapa 4: Veredicto Final ---
+            print("¡Correcto! Todos los puntos están dentro del área válida final.")
+
+    # --- Etapa 4: Veredicto ---
     final_errors = crs_errors + superposition_errors
-    
+
     if invalid_point_ids:
-        error_message_points = (
-            f"Se encontraron {len(invalid_point_ids)} puntos que caen sobre píxeles INVÁLIDOS. "
-            f"Un píxel es inválido si está fuera del polígono de la máscara O si tiene un valor 'nodata' en el ráster de coste. "
-            f"(IDs de muestra: {', '.join(invalid_point_ids[:10])}{'...' if len(invalid_point_ids) > 10 else ''})."
+        final_errors.append(
+            f"Se encontraron {len(invalid_point_ids)} puntos sobre píxeles INVÁLIDOS "
+            f"(fuera de la máscara o con 'nodata'). IDs de muestra: "
+            f"{', '.join(invalid_point_ids[:10])}"
+            f"{'...' if len(invalid_point_ids) > 10 else ''}."
         )
-        final_errors.append(error_message_points)
 
     if final_errors:
         error_details = "\n- ".join(final_errors)
-        error_message = (
+        raise ValueError(
             f"\n{'='*70}\n"
             f"!! ERROR CRÍTICO DE VALIDACIÓN DE DATOS !!\n"
             f"Se encontraron las siguientes inconsistencias:\n- {error_details}\n\n"
-            f"El análisis no puede continuar. Debes corregir tus datos de entrada. Comprueba la posición de los puntos inválidos respecto a las áreas 'nodata' en tu software GIS.\n"
+            f"El análisis no puede continuar. Corrige tus datos de entrada.\n"
             f"{'='*70}"
         )
-        raise ValueError(error_message)
     else:
-        print("\n¡Excelente! Todos los datos de entrada son coherentes y están listos para el análisis.")
+        print("\n¡Excelente! Todos los datos son coherentes y listos para el análisis.")
 
 except Exception as e:
     print(f"Ocurrió un error inesperado durante la validación de datos: {e}")
@@ -287,7 +290,7 @@ try:
 
         # Cargar los puntos usando geopandas
         points_gdf = gpd.read_file(ALL_POINTS_SHAPEFILE)
-        
+
         # Convertir las coordenadas geográficas de los puntos a coordenadas de píxel
         point_pixels_x = []
         point_pixels_y = []
@@ -336,23 +339,11 @@ except Exception as e:
     traceback.print_exc()
 
 
-# In[6]:
+# In[ ]:
 
 
 # ==============================================================================
 # --- CELDA 6: EJECUCIÓN EN DOS FASES (FASE 1: MCP + FASE 2: RECONSTRUCCIÓN) ---
-# ==============================================================================
-#
-# FASE 1 — Dijkstra / MCP_Geometric por origen:
-#   Cada worker calcula la superficie de coste completa desde su origen,
-#   extrae los costes escalares para cada destino y guarda el traceback
-#   comprimido (int8, ~30-80 MB) en OUTPUT_DIR/phase1_tracebacks/.
-#
-# FASE 2 — Reconstrucción de rutas:
-#   Cada worker carga el traceback de un origen desde disco y reconstruye
-#   todas las rutas hacia destinos > origin_id.
-#
-# Al finalizar, si KEEP_PHASE1_FILES es False, se elimina phase1_tracebacks/.
 # ==============================================================================
 print("\n--- INICIANDO PROCESO DE ANÁLISIS EN DOS FASES ---\n")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -362,11 +353,13 @@ os.makedirs(PHASE1_DIR, exist_ok=True)
 
 memmap_path = os.path.join(OUTPUT_DIR, "_raster_shared.dat")
 all_route_records = []
+routes_gdf = None
+dur_p1 = dur_p2 = 0.0
+tasks_p1, tasks_p2 = [], []
+n_jobs_p1 = n_jobs_p2 = 0
 
 try:
-    # ------------------------------------------------------------------
-    # PASO 1 — Preparar datos y escribir raster en memmap compartido
-    # ------------------------------------------------------------------
+    # --- PASO 1: Preparar datos ---
     print("[Paso 1/5] Preparando datos en memoria...")
     all_points, points_crs = dl.load_points_as_dict(ALL_POINTS_SHAPEFILE, ID_FIELD_NAME)
 
@@ -374,7 +367,9 @@ try:
         transform = src.transform
         raster_crs = src.crs
         original_cost_data = src.read(1)
-        final_cost_raster = np.where(main_search_mask, original_cost_data, np.inf).astype(np.float64)
+        final_cost_raster = np.where(
+            main_search_mask, original_cost_data, np.inf
+        ).astype(np.float64)
         raster_shape = final_cost_raster.shape
         raster_dtype = final_cost_raster.dtype
         del original_cost_data
@@ -393,31 +388,29 @@ try:
         "raster_dtype": raster_dtype,
         "raster_shape": raster_shape,
         "src_transform": transform,
+        # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
     }
 
-    # Warm-up Numba en proceso principal (compila la función JIT una vez)
     warm_up_numba()
 
-    # Pre-calcular píxeles de destino para no repetir la conversión en cada worker
     dest_pixels_all = {
         pid: proc.world_to_pixel(transform, coords[0], coords[1])
         for pid, coords in all_points.items()
     }
 
-    # ------------------------------------------------------------------
-    # PASO 3 — FASE 1: MCP por origen → traceback_N.npz + costes escalares
-    # ------------------------------------------------------------------
+    # --- PASO 3: FASE 1 ---
     n_jobs_p1 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=1)
     print(f"\n[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
-    tasks_p1 = []
     for origin_id, origin_coords in all_points.items():
         origin_pixel = proc.world_to_pixel(transform, origin_coords[0], origin_coords[1])
         dest_pixels = {
-            did: dest_pixels_all[did]
-            for did in all_points
-            if did > origin_id
+            did: dest_pixels_all[did] for did in all_points if did > origin_id
         }
+        if not dest_pixels:
+            # El origen de mayor id no tiene destinos: evitamos un Dijkstra global
+            # inútil y un .npz enorme que la Fase 2 descartaría.
+            continue
         tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
 
     print(f"  Total de orígenes a procesar: {len(tasks_p1)}")
@@ -430,28 +423,22 @@ try:
     dur_p1 = time.time() - t0_p1
     print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
-    # Construir índice de costes escalares: {origin_id: {dest_id: float}}
     cost_scalars_index = {oid: cdict for oid, cdict in results_p1}
     n_computed = sum(1 for cdict in cost_scalars_index.values() if cdict)
     print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
 
-    # ------------------------------------------------------------------
-    # PASO 4 — FASE 2: Reconstrucción de rutas desde disco
-    # ------------------------------------------------------------------
+    # --- PASO 4: FASE 2 ---
     n_jobs_p2 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=2)
     print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
-    tasks_p2 = []
     for origin_id, origin_coords in all_points.items():
         cost_scalars = cost_scalars_index.get(origin_id, {})
         if not cost_scalars:
-            # Sin traceback guardado para este origen; omitir.
             continue
-        dest_items = [
-            (did, all_points[did])
-            for did in cost_scalars
-        ]
-        tasks_p2.append((origin_id, origin_coords, dest_items, cost_scalars, transform, PHASE1_DIR))
+        dest_items = [(did, all_points[did]) for did in cost_scalars]
+        tasks_p2.append(
+            (origin_id, origin_coords, dest_items, cost_scalars, transform, PHASE1_DIR)
+        )
 
     print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
     t0_p2 = time.time()
@@ -467,25 +454,17 @@ try:
     print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
     print(f"  Rutas reconstruidas: {len(all_route_records)}")
 
-    # ------------------------------------------------------------------
-    # PASO 5 — Escribir GeoPackage unificado
-    # ------------------------------------------------------------------
+    # --- PASO 5: GeoPackage ---
     print("\n[Paso 5/5] Escribiendo GeoPackage unificado...")
-    routes_gdf = gpd.GeoDataFrame(all_route_records, crs=raster_crs)
     gpkg_output_path = os.path.join(OUTPUT_DIR, "red_completa_unificada.gpkg")
-    routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
-    print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
 
-    # Limpiar archivos temporales
-    if os.path.exists(memmap_path):
-        os.remove(memmap_path)
-        print(f"  Memmap temporal eliminado.")
-
-    if not KEEP_PHASE1_FILES:
-        shutil.rmtree(PHASE1_DIR, ignore_errors=True)
-        print(f"  Tracebacks de Fase 1 eliminados (KEEP_PHASE1_FILES=False).")
+    if not all_route_records:
+        print("  ADVERTENCIA: no se generó ninguna ruta; se omite la escritura del GPKG.")
+        routes_gdf = gpd.GeoDataFrame(geometry=[], crs=raster_crs)
     else:
-        print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR}")
+        routes_gdf = gpd.GeoDataFrame(all_route_records, crs=raster_crs)
+        routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
+        print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
 
     total_duration = dur_p1 + dur_p2
     print("\n" + "="*60)
@@ -501,8 +480,23 @@ except Exception as e:
     import traceback as tb
     tb.print_exc()
 
+finally:
+    # Limpieza garantizada de archivos temporales, incluso ante excepción.
+    if os.path.exists(memmap_path):
+        try:
+            os.remove(memmap_path)
+            print("  Memmap temporal eliminado.")
+        except OSError as ce:
+            print(f"  No se pudo eliminar el memmap: {ce}")
 
-# In[7]:
+    if not KEEP_PHASE1_FILES and os.path.isdir(PHASE1_DIR):
+        shutil.rmtree(PHASE1_DIR, ignore_errors=True)
+        print("  Tracebacks de Fase 1 eliminados (KEEP_PHASE1_FILES=False).")
+    elif KEEP_PHASE1_FILES:
+        print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR}")
+
+
+# In[ ]:
 
 
 # ==============================================================================
@@ -511,9 +505,6 @@ except Exception as e:
 print("\nIniciando la visualización final de la red de rutas...")
 
 try:
-    # Usar el GeoDataFrame construido en memoria por la Celda 6.
-    # Si por alguna razón no existe (e.g. se ejecuta esta celda de forma aislada),
-    # se carga desde el GeoPackage guardado.
     if 'routes_gdf' not in dir() or routes_gdf is None or len(routes_gdf) == 0:
         print("routes_gdf no disponible en memoria; cargando desde el GeoPackage...")
         routes_gdf = gpd.read_file(
@@ -528,11 +519,9 @@ try:
     else:
         print(f"Visualizando {len(final_routes_gdf)} rutas.")
 
-        # 0. Obtener CRS del raster
         with rasterio.open(COST_RASTER_PATH) as src:
             raster_crs = src.crs
 
-        # 1. Armonizar CRS — reprojectar rutas y puntos al CRS del raster si difieren
         if final_routes_gdf.crs is None:
             print("  ADVERTENCIA: routes_gdf sin CRS; asignando raster CRS.")
             final_routes_gdf = final_routes_gdf.set_crs(raster_crs)
@@ -542,31 +531,31 @@ try:
 
         points_gdf = gpd.read_file(ALL_POINTS_SHAPEFILE)
         if points_gdf.crs is None:
-            print("  ADVERTENCIA: points_gdf sin CRS; asignando raster CRS.")
             points_gdf = points_gdf.set_crs(raster_crs)
         elif points_gdf.crs != raster_crs:
-            print(f"  Reproyectando puntos de {points_gdf.crs} → {raster_crs}")
             points_gdf = points_gdf.to_crs(raster_crs)
 
-        # 2. Extensión geográfica total (en raster CRS)
         minx, miny, maxx, maxy = final_routes_gdf.total_bounds
         margin = (maxx - minx) * 0.1
         buffered_bounds = (minx - margin, miny - margin, maxx + margin, maxy + margin)
 
-        # 3. Cargar la porción del ráster de coste
         with rasterio.open(COST_RASTER_PATH) as src:
             import math
             window = from_bounds(*buffered_bounds, transform=src.transform)
-            # Alinear ventana a píxeles enteros (read redondea, transform no)
             col_off = int(math.floor(window.col_off))
             row_off = int(math.floor(window.row_off))
             col_stop = int(math.ceil(window.col_off + window.width))
             row_stop = int(math.ceil(window.row_off + window.height))
-            window = rasterio.windows.Window(col_off, row_off, col_stop - col_off, row_stop - row_off)
+            window = rasterio.windows.Window(
+                col_off, row_off, col_stop - col_off, row_stop - row_off
+            )
+            # Recortar la ventana a los límites reales del ráster para que
+            # window_transform coincida con los datos efectivamente leídos.
+            full = rasterio.windows.Window(0, 0, src.width, src.height)
+            window = window.intersection(full)
             raster_data = src.read(1, window=window)
             window_transform = src.window_transform(window)
 
-        # 4. Crear el mapa
         fig, ax = plt.subplots(figsize=(18, 18))
 
         min_pos_val = np.min(raster_data[raster_data > 0]) if np.any(raster_data > 0) else 1e-9
@@ -582,7 +571,6 @@ try:
         points_gdf.plot(ax=ax, color='yellow', markersize=50, ec='black',
                         label='Nodos de la Red', zorder=5)
 
-        # 5. Configuración final del mapa
         ax.set_title('Red Completa de Rutas de Menor Costo', fontsize=20)
         ax.set_xlabel("Coordenada X"); ax.set_ylabel("Coordenada Y")
         ax.legend(); plt.grid(True, linestyle='--', alpha=0.5)
@@ -599,7 +587,7 @@ except Exception as e:
     tb.print_exc()
 
 
-# In[8]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -607,6 +595,7 @@ except Exception as e:
 # ==============================================================================
 import os, time, gc
 import numpy as np
+import geopandas as gpd          # <-- movido al encabezado (lo usan TODAS las ramas)
 import shapely
 from shapely import get_coordinates
 from joblib import Parallel, delayed
@@ -614,7 +603,8 @@ import fiona
 
 SPACING_M = 25.0
 CHUNK_SIZE = 500
-N_WORKERS = 18
+import psutil
+N_WORKERS = min(18, psutil.cpu_count(logical=True) or 1)
 
 t0 = time.time()
 print(f"\n{'='*60}")
@@ -640,7 +630,6 @@ if 'routes_gdf' in dir() and routes_gdf is not None and len(routes_gdf) > 0:
 elif 'OUTPUT_DIR' in dir() and os.path.exists(p := os.path.join(OUTPUT_DIR, 'red_completa_unificada.gpkg')):
     routes_gdf = gpd.read_file(p, layer='rutas_unificadas')
 else:
-    import geopandas as gpd
     gpkg, sess_dir = _find_latest_gpkg(os.getcwd())
     if gpkg is None:
         raise FileNotFoundError("red_completa_unificada.gpkg no encontrado")
@@ -677,11 +666,27 @@ def densify_chunk(indices, coords_list, lengths, n_pts_arr, spacing):
     chunk_x, chunk_y, chunk_idx = [], [], []
     for idx, coords, length, n in zip(indices, coords_list, lengths, n_pts_arr):
         n = int(n)
+        # --- Guarda de ruta degenerada: longitud 0 o un solo vértice ---
+        if length <= 0 or len(coords) < 2:
+            x0 = coords[0, 0] if len(coords) else 0.0
+            y0 = coords[0, 1] if len(coords) else 0.0
+            chunk_x.append(np.full(n, x0))
+            chunk_y.append(np.full(n, y0))
+            chunk_idx.append(np.full(n, idx, dtype=np.int32))
+            continue
+
         dists = np.linspace(0, float(length), n)
         seg_vecs = np.diff(coords, axis=0)
         seg_lens = np.sqrt((seg_vecs ** 2).sum(axis=1))
         cum_len = np.concatenate([[0], seg_lens.cumsum()])
-        cum_norm = cum_len / float(cum_len[-1])
+        total = float(cum_len[-1])
+        if total <= 0:   # coords duplicadas con length>0 espurio: degenerada
+            chunk_x.append(np.full(n, coords[0, 0]))
+            chunk_y.append(np.full(n, coords[0, 1]))
+            chunk_idx.append(np.full(n, idx, dtype=np.int32))
+            continue
+
+        cum_norm = cum_len / total
         i = np.searchsorted(cum_norm, dists / float(length), side='right') - 1
         i = np.clip(i, 0, len(coords) - 2)
         t = (dists - cum_len[i]) / (seg_lens[i] + 1e-30)
@@ -708,7 +713,7 @@ all_idx = np.concatenate([r[2] for r in results])
 del results; gc.collect()
 n_total = len(xs)
 
-# ── 7. GPKG DIRECTO CON FIONA (sin make_points, sin GeoDataFrame) ──
+# ── 7. GPKG DIRECTO CON FIONA ──
 output_path = os.path.join(OUTPUT_DIR, f'puntos_rutas_{int(SPACING_M)}m.gpkg')
 schema = {'geometry': 'Point', 'properties': {'route_idx': 'int'}}
 crs_wkt = str(_crs_rutas)
@@ -736,7 +741,7 @@ print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1
 print(f"{'─'*60}")
 
 
-# In[9]:
+# In[1]:
 
 
 # ==============================================================================
