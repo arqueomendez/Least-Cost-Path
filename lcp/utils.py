@@ -25,5 +25,5 @@ def build_route_record(pixel_path, transform, origin_id, dest_id, cost_total):
         "dest_id": int(dest_id),
         "cost_total": float(cost_total),
         "length_m": float(line.length),
-        "n_vertices": int(len(pixel_path)),
+        "n_vertices": len(pixel_path),
     }

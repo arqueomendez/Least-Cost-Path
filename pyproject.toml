@@ -26,6 +26,25 @@ dependencies = [
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.ruff]
+line-length = 88
+extend-exclude = [
+    "LCP_MCP_Geometric.py",  # export generado por nbconvert desde el notebook
+    "*.ipynb",               # el notebook se valida ejecutandolo, no con lint
+    ".ipynb_checkpoints",
+    "output",
+]
+
+[tool.ruff.lint]
+# Reglas fijadas en el repo para que el lint sea reproducible (antes dependia
+# de una config externa al repositorio). E4/E7/E9/F son los defaults de ruff;
+# W605 (escapes invalidos), I (orden de imports), UP (pyupgrade) y RUF se
+# anaden por valor. BLE001 y PLR0402 NO se seleccionan a proposito:
+# - BLE001: los workers de lcp/ y las celdas del notebook capturan Exception
+#   de forma deliberada para diagnosticar sin tumbar el pool paralelo.
+# - PLR0402: el proyecto usa `import lcp.modulo as alias` (AGENTS.md 6.1).
+select = ["E4", "E7", "E9", "F", "W605", "I", "UP", "RUF"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

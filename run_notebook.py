@@ -1,4 +1,4 @@
-"""
+r"""
 Script temporal de sesion - NO forma parte del proyecto.
 Ejecuta LCP_MCP_Geometric.ipynb directamente con nbclient (sin browser).
 
@@ -8,9 +8,9 @@ Uso:
     .venv\Scripts\python run_notebook.py
 """
 
+import os
 import subprocess
 import sys
-import os
 
 NOTEBOOK = "LCP_MCP_Geometric.ipynb"
 VENV_PYTHON = os.path.join(os.getcwd(), ".venv", "Scripts", "python.exe")
@@ -38,6 +38,7 @@ def main():
             NOTEBOOK,
         ],
         cwd=os.getcwd(),
+        check=False,  # el returncode se inspecciona y propaga mas abajo
     )
 
     if result.returncode == 0:

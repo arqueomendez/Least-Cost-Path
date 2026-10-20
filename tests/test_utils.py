@@ -18,7 +18,7 @@ def test_build_route_record_valid():
     assert rec["length_m"] == pytest.approx(10.0)
     assert rec["n_vertices"] == 2
     assert rec["geometry"].geom_type == "LineString"
-    assert list(rec["geometry"].coords)[0] == (105.0, 195.0)
+    assert next(iter(rec["geometry"].coords)) == (105.0, 195.0)
 
 
 def test_build_route_record_none_path():
