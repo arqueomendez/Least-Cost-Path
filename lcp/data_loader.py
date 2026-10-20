@@ -41,6 +41,7 @@ def load_points_as_dict(shapefile_path, id_field):
     Compatible con fiona 1.9+ (acceso por atributo en lugar de dict-style).
     """
     points = {}
+    duplicated = []
     crs = None
     print(f"Cargando puntos desde: {os.path.basename(shapefile_path)}")
     if not os.path.exists(shapefile_path):
@@ -88,7 +89,15 @@ def load_points_as_dict(shapefile_path, id_field):
 
             # shape() normaliza Geometry de fiona 1.9 o dict-geojson antiguo.
             geom = shape(_get_geometry(feature))
+            if point_id in points and point_id not in duplicated:
+                duplicated.append(point_id)
             points[point_id] = (geom.x, geom.y)
+
+        if duplicated:
+            raise ValueError(
+                f"IDs duplicados en '{os.path.basename(shapefile_path)}': "
+                f"{sorted(duplicated)}. Cada punto debe tener un ID unico."
+            )
 
     print(f"Se cargaron {len(points)} puntos.")
     return points, crs
