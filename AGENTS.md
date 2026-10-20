@@ -83,6 +83,7 @@ Existe una suite de **pytest** en `tests/`:
 | `test_pathfinder.py` | `reconstruct_path_from_traceback` + canary de `DEFAULT_OFFSETS` vs skimage |
 | `test_integration.py` | roundtrip Fase 1 → Fase 2 sobre un ráster sintético |
 | `test_notebook_hardening.py` | pins estructurales de los specs S2-S8 del notebook (fuente, sin ejecutarlo) |
+| `test_requirements_export.py` | S15: `requirements.txt` fiel a `uv.lock` y cabecera con el comando generador |
 
 ### Ejecutar los tests
 
