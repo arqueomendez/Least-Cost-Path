@@ -1,0 +1,47 @@
+# Feature: notebook-hardening
+
+Objetivo: mejorar la implementación detectando errores, ganando robustez y mejorando la ejecución vía notebook, con arreglos in-place (sin refactor), suite pytest y higiene de repo.
+Branch: `feature/notebook-hardening` (desde `LCP_MCP_Geometric`). Estrategia de entrega: `chain_strategy=feature-branch-chain` (elegida por el usuario al superar las ~400 líneas autorizadas); commits locales por unidad de trabajo, sin push.
+Runner de tests: `uv run pytest tests/` · Verificación funcional: `uv run jupyter nbconvert --to notebook --execute --output _exec_check.ipynb --ExecutePreprocessor.timeout=1800 --ExecutePreprocessor.kernel_name=python3 LCP_MCP_Geometric.ipynb`
+
+## Specs
+
+- **S1** — Alcance elegido por el usuario (decisiones verbatim): estrategia "Arreglos in-place" (sin refactor a lcp/); tests "Sí, tests (recomendado)" con pytest sobre los datos de ejemplo; higiene: "Sincronizar docs (README/AGENTS)", "Ruff: fix + format + config fijada", "Limpiar artefactos trackeados".
+- **S2** — Celda 6: un fallo de worker en Fase 1 no puede quedar silencioso. Hoy solo imprime `Tracebacks guardados: X/N`. Requisito: si algún origen devuelve dict vacío, listar sus IDs, indicar que la red quedaría incompleta y **detener** la ejecución antes de Fase 2 (no escribir GPKG parcial).
+- **S3** — Celda 6: informar el número de destinos con coste infinito (inalcanzables) tras Fase 1, con IDs de muestra.
+- **S4** — Celda 9: eliminar el hardcode `puntos_rutas_25m.gpkg` (líneas de chequeo y de lectura). Debe resolver el path con el mismo espaciado de Celda 8 (`puntos_rutas_{int(SPACING_M)}m.gpkg`), defensa con `globals().get('SPACING_M', 25.0)` para ejecución suelta de la celda. Check: ejecución completa con `SPACING_M = 50` usa `puntos_rutas_50m.gpkg`.
+- **S5** — Celda 3: `ID_FIELD_NAME = 'id'` (campo real de `data/points.shp`; hoy `'fid'` provoca `ADVERTENCIA: Campo 'fid' no encontrado en propiedades. Se usará el 'feature.id'`). Check: ejecución sin esa advertencia.
+- **S6** — Celdas 7, 8 y 9: reemplazar las comprobaciones `'var' not in dir()` / `'var' in dir()` por `globals()` (semántica correcta de namespace de módulo/notebook).
+- **S7** — Celda 8: (a) si `_crs_rutas` es `None`, no pasar `crs=str(None)` a fiona (hoy `crs_wkt = str(_crs_rutas)` produce `"None"`); (b) una ruta degenerada sin coordenadas no debe escribir puntos en `(0, 0)` del mundo (guarda actual con `x0 = 0.0`), debe omitirse.
+- **S8** — Sincronizar `LCP_MCP_Geometric.py` regenerándolo desde el notebook (`jupyter nbconvert --to script`): eliminar el drift actual (paths hardcodeados `C:\Users\LAV\Desktop\Proyecto Vannia\...` y `HEATMAP_BANDWIDTH_M = 10000` frente a `data/...` y `1000` en el notebook).
+- **S9** — `lcp/data_loader.py::load_points_as_dict`: los IDs duplicados hoy sobrescriben silenciosamente en el dict. Requisito: detectarlos y lanzar `ValueError` con los IDs duplicados. Desarrollo test-first: RED observado antes de la implementación.
+- **S10** — Suite `tests/` con pytest: `build_route_record` (válido / `None` / <2 vértices), `world_to_pixel`, `reconstruct_path_from_traceback` (consistencia con offsets reales de skimage MCP_Geometric), `load_points_as_dict` (archivo inexistente → `FileNotFoundError`, campo inexistente → `KeyError`, IDs duplicados → `ValueError`, 14 puntos de `data/points.shp`), y mini end-to-end Fase 1→2 sobre un ráster sintético. Runner: `uv run pytest tests/`.
+- **S11** — Docs sincronizadas: `README.md` y `AGENTS.md` sin referencias a archivos inexistentes (`LCP_MCP_Geometric-retake.ipynb`, `generar_heatmap.py`, `_diag_global.py`); documentar la regeneración del `.py` y los cambios nuevos.
+- **S12** — Ruff: fijar `[tool.ruff]` en `pyproject.toml` (config reproducible en repo) y dejar `uv run ruff check` + `uv run ruff format --check` limpios sobre `lcp/`, `run_notebook.py`, `LCP_MCP_Geometric.py` y `tests/` (incluye W605 de `run_notebook.py` y findings F).
+- **S13** — Git: `git rm --cached` de `lcp/__pycache__/`, `.ipynb_checkpoints/`, `lcp/.ipynb_checkpoints/` y logs (`output/registro_maestro_procesamiento.log`, `data/registro_maestro_procesamiento.log`); añadir `*.log` a `.gitignore` (autorizado por el usuario: "Limpiar artefactos trackeados").
+
+## Tasks
+
+- T1 — S2,S3,S6 — inline — done — da1bcd5 — Notebook celdas 6/7/8: fallo duro ante workers Fase 1 + reporte destinos inf + dir()→globals() (chequeo estructural OK: 0 dir() restantes en celdas 6-8; la línea de celda 9 queda para T2)
+- T2 — S4,S5,S7 — inline — done — 4f9deb3 — Chequeo estructural OK (0 `dir()`, 0 `puntos_rutas_25m` hardcodeado) + ejecución funcional verde: sin advertencia 'fid', 91 rutas, heatmap_30m_1km con path dinámico, 0 outputs de error (ejecución cubre también T1). — Notebook celdas 3/8/9: SPACING_M dinámico, ID_FIELD_NAME='id', CRS None y ruta degenerada
+- T3 — S8 — inline — done — 911f874 — Regenerado vía nbconvert: 0 referencias 'Proyecto Vannia', paths a data/, bandwidth 1000; drift residual vs notebook solo de líneas en blanco.
+- T4 — S9,S10 — inline — done — 12cd8f8 — RED observado (`DID NOT RAISE ValueError` en IDs duplicados, 13 restantes pasaban) → implementación en `load_points_as_dict` → GREEN 14 passed (1.31 s). — Tests pytest (RED→GREEN en IDs duplicados) + validación en load_points_as_dict
+- T6 — S12 — inline — done — d8f17aa — `ruff check .` y `ruff format --check .` limpios, 14 tests pasan tras formateo. Alcance final de S12: el export generado y los .ipynb quedan excluidos del lint (justificado en el propio `[tool.ruff]` y documentado en AGENTS.md).
+- T5 — S11 — inline — done — 7999ddb — Verificación: grep 0 referencias a `retake`/`generar_heatmap`/`_diag_global` ni `10km` residuales en README+AGENTS; `ruff check .` sigue limpio.
+- T7 — S13 — inline — done — f2a4155 — 16 archivos fuera del índice (2667 líneas), en disco intactos; `.gitignore` con `*.log` y `_exec_check.ipynb`.
+- T8 — verificación — inline — done — Evidencia: (a) S4 aceptado con SPACING_M=50 → sesión con `puntos_rutas_50m.gpkg`, celda 9 generó GeoTIFF sin errores (41 212 pts); (b) run final restaurado a 25 → 0 error outputs, 13/13 tracebacks, 91 rutas, 82 288 puntos, `heatmap_30m_1km_quartic.tif`; (c) `uv run pytest tests/` 14 passed; (d) `ruff check .` All checks passed + `ruff format --check .` 15 files formatted; (e) `git status` solo `odd/` pendiente de commit. — Limpiar artefactos trackeados del índice git
+
+## Log
+
+- **L1** (petición original del usuario, verbatim): "El objetivo es mejorar la implementación, detectando errores, haciendola más robusta y mejorando la forma de ejecución mediante los notebooks"
+- **L2** (decisiones del usuario vía questionnaire, verbatim): estrategia "Arreglos in-place"; tests "Sí, tests (recomendado)"; higiene: "Sincronizar docs (README/AGENTS)", "Ruff: fix + format + config fijada", "Limpiar artefactos trackeados".
+- **L11** (T8): verificación final completa. Criterios de aceptación de S1-S13 observados.
+- **L12** (decisión de entrega del usuario, verbatim): "Cadena en la branch de la feature" → `chain_strategy=feature-branch-chain`. Recuento exacto previo a la pregunta: add=412, del=69, total=481 autorizadas (excluidos export `.py` generado y artefactos des-trackeados).
+- **L10** (T7): commit `f2a4155`. `git status` limpio salvo `odd/` (se commita al cerrar con la evidencia final).
+- **L9** (T5): commit `7999ddb`. README y AGENTS sincronizados: suite de tests documentada con tabla, autodetección de sesiones en celdas 8/9, regeneración del export `.py`, config ruff fijada, robustez del pipeline y bandwidth 1 km coherente con el notebook.
+- **L8** (T6): commit `d8f17aa`. Config fijada en `pyproject.toml` (E4/E7/E9/F/W605/I/UP/RUF; BLE001 y PLR0402 no seleccionados, justificados en config). Fix manual de RUF005/RUF015/check=False. Nota: `lcp/__pycache__/*.pyc` aparece modificado en working tree porque está trackeado — T7 lo elimina del índice.
+- **L7** (T4): commit `12cd8f8`. RED→GREEN completo; `uv add --dev pytest`; `[tool.pytest.ini_options]` en pyproject. Orden de trabajo intercambiado: T6 (ruff) antes que T5 (docs) para que las docs describan la config final.
+- **L6** (T3): commit `911f874`. Verificación: grep 0 paths hardcodeados, drift fuente vs notebook = 0 (solo whitespace de nbconvert).
+- **L5** (T2): commit `4f9deb3`. Evidencia funcional: ejecución nbconvert exit 0 (26 s), 0 outputs de error, sin `ADVERTENCIA: Campo 'fid'`, 91 rutas, 82 288 puntos, GeoTIFF `heatmap_30m_1km_quartic.tif` con resolución de path dinámico. La advertencia cosmética `KeyError` del resource_tracker de joblib/loky en Windows persiste (dependencia, fuera de alcance de specs).
+- **L4** (T1): commit `da1bcd5`. Verificación estructural: `pipeline_ok`, `FASE 1 INCOMPLETA`, `pares_inf` presentes; `dir()` eliminado en celdas 6/7/8 (resto en celda 9 → T2). La verificación funcional completa queda en T8.
+- **L3** (evidencia de exploración): ejecución completa del notebook sobre `data/` (ráster 849x994, 14 puntos) → exit 0 en 39 s: 91 rutas (14×13/2=91 ✓), 82 288 puntos densificados, heatmap OK. Confirmado: advertencia `Campo 'fid' no encontrado`, ruido `KeyError` del resource_tracker de joblib/loky en Windows (cosmético), drift notebook vs `.py` (paths y `HEATMAP_BANDWIDTH_M` 1000 vs 10000).
