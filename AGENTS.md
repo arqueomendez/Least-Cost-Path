@@ -82,6 +82,7 @@ Existe una suite de **pytest** en `tests/`:
 | `test_data_loader.py` | `load_points_as_dict` (14 puntos de ejemplo, errores e IDs duplicados) |
 | `test_pathfinder.py` | `reconstruct_path_from_traceback` + canary de `DEFAULT_OFFSETS` vs skimage |
 | `test_integration.py` | roundtrip Fase 1 → Fase 2 sobre un ráster sintético |
+| `test_notebook_hardening.py` | pins estructurales de los specs S2-S8 del notebook (fuente, sin ejecutarlo) |
 
 ### Ejecutar los tests
 
