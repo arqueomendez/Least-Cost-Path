@@ -506,8 +506,6 @@ except Exception as e:
     import traceback as tb
     tb.print_exc()
     raise
-    import traceback as tb
-    tb.print_exc()
 
 finally:
     # Limpieza garantizada de archivos temporales, incluso ante excepción.
@@ -731,6 +729,10 @@ def densify_chunk(indices, coords_list, lengths, n_pts_arr, spacing):
         chunk_x.append(coords[i, 0] + t * seg_vecs[i, 0])
         chunk_y.append(coords[i, 1] + t * seg_vecs[i, 1])
         chunk_idx.append(np.full(n, idx, dtype=np.int32))
+    if not chunk_x:
+        # Lote completo de rutas sin geometria utilizable: sin puntos que anadir
+        # (evita ValueError de np.concatenate sobre lista vacia).
+        return (np.empty(0), np.empty(0), np.empty(0, dtype=np.int32))
     return (np.concatenate(chunk_x), np.concatenate(chunk_y),
             np.concatenate(chunk_idx))
 
