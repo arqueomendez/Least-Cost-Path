@@ -39,18 +39,23 @@ que `pyproject.toml` y `uv.lock` quedan actualizados.
 
 ## 2. Linting y formato
 
-El proyecto usa **ruff** (v0.12.5). No hay un `[tool.ruff]` explícito en
-`pyproject.toml`, por lo que rigen los defaults de ruff.
+El proyecto usa **ruff** (v0.12.5). La configuración está fijada en
+`pyproject.toml` (`[tool.ruff]` / `[tool.ruff.lint]`) para que el lint sea
+reproducible: `E4/E7/E9/F` (defaults de ruff) más `W605`, `I`, `UP` y `RUF`.
+Quedan excluidos el export generado `LCP_MCP_Geometric.py` (nbconvert) y los
+`.ipynb` (el notebook se valida ejecutándolo). `BLE001` y `PLR0402` no se
+seleccionan a propósito: los workers y las celdas capturan `Exception` de forma
+deliberada, y el proyecto usa `import lcp.modulo as alias` (sección 6.1).
 
 ```sh
 # Verificar estilo (sin modificar archivos)
-uv run ruff check lcp/
+uv run ruff check .
 
 # Corregir automáticamente lo que ruff pueda
-uv run ruff check --fix lcp/
+uv run ruff check --fix .
 
 # Aplicar formato
-uv run ruff format lcp/
+uv run ruff format .
 
 # Verificar un único archivo
 uv run ruff check lcp/pathfinder.py
@@ -68,14 +73,24 @@ los archivos modificados. No introduzcas errores de lint nuevos.
 
 ## 3. Tests
 
-**No existe una suite de tests formal** en este repositorio. No hay directorio
-`tests/` ni archivos `test_*.py`.
+Existe una suite de **pytest** en `tests/`:
 
-### Scripts de diagnóstico
+| Archivo | Cobertura |
+|---|---|
+| `test_utils.py` | `build_route_record` (válido / `None` / ruta corta) |
+| `test_processing.py` | `world_to_pixel` |
+| `test_data_loader.py` | `load_points_as_dict` (14 puntos de ejemplo, errores e IDs duplicados) |
+| `test_pathfinder.py` | `reconstruct_path_from_traceback` + canary de `DEFAULT_OFFSETS` vs skimage |
+| `test_integration.py` | roundtrip Fase 1 → Fase 2 sobre un ráster sintético |
+
+### Ejecutar los tests
 
 ```sh
-# Verifica que el patrón global + loky funcione en Windows
-uv run python _diag_global.py
+# Suite completa
+uv run pytest tests/
+
+# Un solo archivo
+uv run pytest tests/test_pathfinder.py -v
 ```
 
 ### Ejecutar el notebook de forma no interactiva
@@ -85,12 +100,10 @@ uv run python _diag_global.py
 uv run python run_notebook.py
 ```
 
-### Si añades tests (recomendado)
+### Si añades tests
 
-- Crea el directorio `tests/` en la raíz del proyecto.
 - Nombra los archivos `test_<modulo>.py` (p. ej. `test_pathfinder.py`).
-- Usa **pytest**: `uv run pytest tests/`
-- Para un único test: `uv run pytest tests/test_pathfinder.py::test_mi_funcion -v`
+- La config de pytest (`pythonpath`, `testpaths`) está en `pyproject.toml`.
 - Las funciones Numba (`@njit`) deben testearse con arrays `numpy` reales;
   el primer llamado incurre en compilación JIT (~2–5 s): es normal.
 
@@ -107,9 +120,12 @@ El notebook principal es `LCP_MCP_Geometric.ipynb`. Ejecuta las celdas en orden
 (1 → 9). Los parámetros de usuario están en **Celda 3** (pipeline principal) y en
 **Celdas 8 y 9** (post-procesamiento: puntos densificados y heatmap).
 
-Para retomar resultados ya calculados sin reejecutar el pipeline completo, usa
-`LCP_MCP_Geometric-retake.ipynb` y corre directamente las celdas 8 y 9 (ya
-apuntan al directorio de sesión existente).
+Para retomar resultados ya calculados sin reejecutar el pipeline completo, corre
+solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
+`OUTPUT_DIR` no apunta a una sesión válida (la Celda 9 busca el archivo
+`puntos_rutas_<SPACING_M>m.gpkg` correspondiente). El export
+`LCP_MCP_Geometric.py` se regenera desde el notebook con
+`uv run jupyter nbconvert --to script LCP_MCP_Geometric.ipynb`; no lo edites a mano.
 
 ---
 
@@ -117,7 +133,7 @@ apuntan al directorio de sesión existente).
 
 | Archivo | Responsabilidad |
 |---|---|
-| `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`). |
+| `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`); valida IDs duplicados de puntos. |
 | `processing.py` | Conversión mundo↔píxel, creación de máscaras raster desde vectores, corredor de búsqueda. |
 | `pathfinder.py` | Motor MCP (`MCP_Geometric`), reconstrucción de traceback con Numba `@njit`, y `compute_and_save_cost_surface()` (worker Fase 1: calcula superficie de coste y guarda traceback comprimido en `.npz`). |
 | `postprocessing.py` | Extrae todas las rutas desde un origen dado (`extract_routes`); aplica deduplicación `dest_id > origin_id`; y `reconstruct_routes_from_disk()` (worker Fase 2: carga traceback desde `.npz` y reconstruye rutas). |
@@ -289,6 +305,9 @@ Worker: `lcp.pathfinder.compute_and_save_cost_surface(args)`
   extrae el escalar `costs[row, col]` por cada destino y lo retorna como dict ligero.
 - Estimación de RAM por worker: `raster_bytes × 2.125`
   (raster float64 + costs float64 + traceback int8).
+- Si algún worker falla, la **Celda 6** lista los IDs afectados y **detiene** la
+  ejecución antes de la Fase 2 (nunca escribe un GPKG parcial). Los destinos
+  inalcanzables (coste `inf`) se informan con sus IDs pero no bloquean.
 
 ### Fase 2 — Reconstruir rutas desde disco
 
@@ -336,8 +355,9 @@ de seguridad del 20%.
   `(2*R-1, 2*R-1)` en vez de `(R-1, R-1)`. **Bug corregido en commit `be6161f`.**
 - Salidas: GeoTIFF (`heatmap_<res>m_<bw>km_<kernel>.tif`) + PNG inline.
 - La convolución FFT sobre histograma rasterizado es matemáticamente idéntica al KDE punto-a-punto.
-- Script standalone: `generar_heatmap.py` — acepta argumentos CLI (`--res`, `--bw`, `--kernel`)
-  para procesar cualquier GPKG de puntos sin editar código.
+- El archivo de entrada se resuelve como `puntos_rutas_<SPACING_M>m.gpkg` con el
+  mismo `SPACING_M` de la Celda 8 (default 25 m si la Celda 8 no corrió en el
+  kernel actual); la autodetección de sesión busca ese mismo archivo.
 
 ---
 
