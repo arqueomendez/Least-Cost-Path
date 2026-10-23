@@ -1,0 +1,46 @@
+# Feature: quality-corrections
+
+Objetivo: ejecutar las correcciones del backlog derivado de la evaluación general, con las exclusiones explícitas del usuario: sin A2 (lineage RDD) y sin CI/CD en GitHub (sí pytest y ruff como checks locales en cada tarea).
+Branch: `feature/quality-corrections` (apilada sobre `feature/star-origin-mode`). Entrega: commits locales, sin push (directiva previa L16/L2 del feature star-origin-mode sigue vigente).
+Runner de checks (tras CADA tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `uv run ruff format --check .`. Corrida funcional del notebook cuando una tarea toca celdas.
+
+## Specs
+
+- **S0** — Restricciones verbatim del usuario (L1/L2): "Solo A2 no se ejecuta" (el lineage `review-8cb90e8be2870dcb` queda intacto, sin operaciones); "No se ejecuta CI/CD en github, aunque si pytest y ruff" (sin GitHub Actions/pre-commit de CI — la verificación es local con esas dos herramientas).
+- **S1** (A1) — Upgrade `joblib` a 1.6.0 (`uv add --upgrade joblib`), `requirements.txt` re-exportado, y corrida del notebook para constatar si desaparece el `KeyError` del resource_tracker. Si persiste, documentar que el fix directo (joblib PR#1829 + loky 3.7.0) aún no tiene release.
+- **S2** (A3) — Integración local: fusionar `feature/notebook-hardening`, `feature/star-origin-mode` y `feature/quality-corrections` en `LCP_MCP_Geometric` con `--no-ff`, **sin push**; verificación post-merge (pytest + ruff + corrida).
+- **S3** (B1) — Test de regresión del KDE/FFT (hueco más caro: dos bugs históricos `dbd1595`/`be6161f` sin red): extraer la lógica de la Celda 9 en una función testeable **sin cambio de comportamiento** (refactor mínimo justificado por testeabilidad) y testear: (a) punto sintético → pico en `(R−1, R−1)` tras el crop, (b) `pixel_size` del binning == `pixel_size` del `from_bounds` (georreferenciación sin desplazamiento), (c) normalización del kernel (suma·área = 1).
+- **S4** (B2) — Test funcional de la validación de la Celda 4 con **fixtures negativas** vía harness de mini-notebook (celdas 1–4 ejecutadas con nbclient en tmp): CRS desalineado → exit ≠ 0 con mensaje de CRS; punto fuera de máscara → exit ≠ 0 con IDs listados. El camino positivo ya está cubierto por las corridas completas.
+- **S5** (B3) — Tests unitarios de `lcp/data_loader.py` y `lcp/processinging.py` pendientes: `load_raster` (inexistente → `FileNotFoundError`), `load_mask_geometry` (`None`/vacío), `create_mask_from_vector` (CRS mismatch → `ValueError`; geometría inválida reparada con `buffer(0)`).
+- **S6** (B4) — Tests de `_calculate_n_jobs_for_phase` (AST-extract del patrón densify, con stubs de psutil/sys): mínimo 1, tope 61 en win32, sensibilidad a RAM disponible.
+- **S7** (C3) — Validación `N ≥ 2` en modo `single_origin` (Celda 4) + pin (cierra el edge N=1 de la evaluación).
+- **S8** (C2) — Destinos inalcanzables visibles en la salida: segunda capa GPKG `destinos_inalcanzables` (campos `origin_id`, `dest_id`, `cost_total=inf`) escrita junto a `rutas_unificadas` **sin tocar el esquema de la capa existente** + pin + corrida.
+- **S9** (C1) — Reanudación de Fase 1 con fingerprint: parámetro `RESUME` en Celda 3; la carpeta `phase1_tracebacks/` guarda la huella (hash de puntos + ráster + modo); si coincide, se reutilizan los `.npz` válidos y se salta la Fase 1 de esos orígenes; si no coincide, se recalcula (nunca reutilizar datos con huella distinta). Incluye pin estructural + corrida de reanudación simulada.
+- **S10** (D1) — Celdas markdown en español para el resto del notebook (celdas 1–2 y 4–9: qué hace cada una), siguiendo el estilo de la celda de modos ya existente.
+- **S11** (D2) — Política de outputs: `nbstripout` como dependencia dev + filtro local (`nbstripout --install`, solo `.git/config` local, sin CI) + strip de los outputs commiteados (elimina ~7 MB de la historia futura); nota en AGENTS: la evidencia de corridas vive en `_exec_*.ipynb` (ignorados).
+- **S12** (D3/E2/E3) — Higiene: docstring obsoleto de `run_notebook.py` ("NO forma parte del proyecto" → descripción real); `ruff` como dev-dep fijado para que `uv run ruff` funcione sin fallback y la versión de AGENTS sea verdadera; `description` del `pyproject.toml` ("Add your description here" → real).
+- **S13** (E4/E5) — `CHANGELOG.md` con las dos features y este backlog; revisar `CITATION.cff` (fecha de release); nota en AGENTS sobre limpieza de `output/` (sesiones locales acumuladas).
+- **S14** (proceso) — Cada tarea cierra con pytest + ruff verdes y su commit; sin GitHub Actions ni pre-commit de CI (exclusión verbatim S0).
+
+## Tasks
+
+- T1 — S12 — done — 4d458e7 — ruff 0.17.2 dev-dep (`uv run ruff` nativo), docstring real de run_notebook, description del pyproject, AGENTS con versión/ fallback verdaderos, requirements resync. Checks: 36 passed, ruff/format verdes.
+- T2 — S5,S6 — done — tests de loaders/mascara/n_jobs: **45 passed** tras ruff fix+format (caracterización: sin RED por política).
+- **L4** (T3): refactor KDE **byte-idéntico** al baseline (sha256 del heatmap idéntico pre/post `fac1a7fd…`); descubrimiento empírico: la masa discreta del KDE es `1/ps²` (normalización por área = densidad), no 1 — expectativa del test corregida contra la evidencia.
+- T3 — S3 — done — 17aac83 — Refactor Celda 9 → `_compute_heatmap` (math movido verbatim; orden de prints de consola ligeramente distinto, cosmetic). **Paridad probada**: sha256 del array del GeoTIFF post-refactor == baseline pre-refactor (`fac1a7fd…`). Tests: pico en la celda del punto (4 kernels + argmax estricto quartic), pixel_size desde bounds (≠ res), ejes fila/columna en grilla asimétrica, masa discreta = 1/ps² (densidad — expectativa corregida contra evidencia empírica, no el código), kernel desconocido → ValueError. 12 tests KDE; batería **57 passed**, ruff/format verdes.
+- T4 — S4 — pending — inline — Harness mini-notebook celdas 1–4 con fixtures negativas (CRS, punto fuera)
+- T5 — S7 — pending — inline — Validación N≥2 en single_origin + pin
+- T6 — S8 — pending — inline — Capa GPKG destinos_inalcanzables + pin + corrida
+- T7 — S9 — pending — inline — Reanudación con fingerprint (RESUME) + pin + corrida simulada — el más pesado
+- T8 — S10 — pending — inline — Markdown en español para celdas 1–2 y 4–9
+- T9 — S11 — pending — inline — nbstripout (dev-dep + filtro local + strip de outputs) + nota AGENTS
+- T10 — S1 — pending — inline — Upgrade joblib → 1.6.0 + requirements + corrida (KeyError)
+- T11 — S13 — pending — inline — CHANGELOG + CITATION + nota output/
+- T12 — S2 — pending — inline — Merge local --no-ff de las tres ramas en LCP_MCP_Geometric + verificación post-merge
+- T13 — cierre — pending — inline — Cierre: docs, espejo, commits finales
+
+## Log
+
+- **L1** (petición del usuario, verbatim): "Crea una planificación para realizar las correcciones. Solo A2 no se ejecuta. No se ejecuta CI/CD en github, aunque si pytest y ruff"
+- **L2** (alcance interpretado del backlog de la evaluación general): se ejecutan A1, A3, B1–B4, C1–C3, D1–D3, E2–E5; se excluyen A2 (lineage, verbatim) y E1-CI (GitHub Actions/pre-commit de CI, verbatim). `pytest` + `ruff` corren tras cada tarea (checks locales, no CI).
+- **L3** (ejecución): branch `feature/quality-corrections` creada apilada. T1 `4d458e7` (ruff 0.17.2 dev-dep + metadata); T2 en verde (45 passed, 9 tests nuevos: loaders, máscara con CRS mismatch y reparación de bowtie, `_calculate_n_jobs_for_phase` con stubs de psutil/sys).
