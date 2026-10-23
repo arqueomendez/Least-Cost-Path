@@ -73,8 +73,8 @@ def test_cell6_writes_unreachable_layer(tmp_path):
     with fiona.open(gpkg, layer="rutas_unificadas") as src:
         assert len(src) == 2  # (1,2) y (3,4): solo dentro de cada region
     with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
-        rows = {(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src}
-    assert rows == {(1, 3), (1, 4), (2, 3), (2, 4)}
+        rows = [(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src]
+    assert sorted(rows) == [(1, 3), (1, 4), (2, 3), (2, 4)]  # len==4: sin dupes
 
     # ademas: el aviso de reales != esperadas (2 de 6) y el de inalcanzables
     assert "!= esperadas" in out
@@ -123,5 +123,76 @@ def test_cell6_resume_reuses_phase1(tmp_path):
     with fiona.open(gpkg, layer="rutas_unificadas") as src:
         assert len(src) == 2
     with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
-        rows = {(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src}
-    assert rows == {(1, 3), (1, 4), (2, 3), (2, 4)}
+        rows = [(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src]
+    assert sorted(rows) == [(1, 3), (1, 4), (2, 3), (2, 4)]  # len==4: sin dupes
+
+
+def test_s8_unreachable_layer_is_idempotent_across_reruns(tmp_path):
+    """S8: re-ejecutar la Celda 6 en la MISMA sesion (flujo RESUME de S9)
+    debe dejar exactamente los mismos pares inalcanzables, sin duplicados."""
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_idem.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+
+    def sources():
+        srcs = nh.build_cells_1_to_4(
+            tmp_path,
+            raster=raster,
+            points=pts,
+            mask=None,
+            fixed_output_name="session_idem",
+            keep_phase1=True,
+        )
+        return [*srcs, nh.load_code_sources()[5]]
+
+    for _ in range(2):
+        _out, err = nh.run_code(sources(), timeout=600)
+        assert err is None, err
+
+    gpkg = tmp_path / "session_idem" / "red_completa_unificada.gpkg"
+    with fiona.open(gpkg, layer="rutas_unificadas") as src:
+        assert len(src) == 2
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        rows = [(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src]
+    assert sorted(rows) == [(1, 3), (1, 4), (2, 3), (2, 4)], f"duplicados: {rows}"
+
+
+def test_s9_fingerprint_mismatch_recomputes_phase1(tmp_path):
+    """S9: huella distinta -> nunca reutilizar (wipe + recalculo de Fase 1)."""
+    import json as _json
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_fp.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+    srcs = nh.build_cells_1_to_4(
+        tmp_path,
+        raster=raster,
+        points=pts,
+        mask=None,
+        fixed_output_name="session_fp",
+        keep_phase1=True,
+    )
+    cell6 = nh.load_code_sources()[5]
+
+    _out1, err1 = nh.run_code([*srcs, cell6], timeout=600)
+    assert err1 is None, err1
+    meta = tmp_path / "session_fp" / "phase1_tracebacks" / "phase1_meta.json"
+    m = _json.loads(meta.read_text(encoding="utf-8"))
+    m["fingerprint"] = "0" * 64
+    meta.write_text(_json.dumps(m), encoding="utf-8")
+
+    out2, err2 = nh.run_code([*srcs, cell6], timeout=600)
+    assert err2 is None, err2
+    assert "reutilizando" not in out2

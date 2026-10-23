@@ -77,7 +77,10 @@ def test_s8_unreachable_layer_written():
     s = SRC[5]
     assert 'layer="destinos_inalcanzables"' in s
     assert "pares_inf" in s
-    assert 'mode="a" if os.path.exists' in s
+    # idempotente: reemplaza la capa en cada corrida (nunca append) — el fix
+    # del REJECT L15; `mode="a"` duplicaba registros al re-ejecutar (S8 enmendado)
+    assert 'mode="w"' in s
+    assert 'mode="a"' not in s
 
 
 def test_s9_resume_wiring():

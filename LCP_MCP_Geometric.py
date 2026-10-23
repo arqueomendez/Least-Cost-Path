@@ -5,7 +5,7 @@
 # 
 # Carga las librerías del proyecto (rasterio, fiona, geopandas, joblib, matplotlib, psutil) y los módulos del paquete `lcp/` (`data_loader`, `processing`, `pathfinder`, `utils`, `postprocessing`). Si falla esta celda, el entorno no está sincronizado: ejecutá `uv sync`.
 
-# In[1]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -45,7 +45,7 @@ print("Módulos cargados exitosamente.")
 # - `_calculate_n_jobs_for_phase`: estima cuántos workers caben según la RAM disponible (Fase 1 ≈ `raster × 5.5` por worker; Fase 2 ≈ 80 MB; tope de 61 procesos en Windows).
 # - `warm_up_numba`: pre-compila la reconstrucción JIT antes del bucle principal y verifica que los offsets de `MCP_Geometric` sigan siendo los esperados.
 
-# In[2]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -153,7 +153,7 @@ def warm_up_numba():
 # - La **Celda 6** imprime `MODO: ... | rutas esperadas: N` al arrancar y, al final, compara las rutas reales con las esperadas: si difieren, revisá los destinos con coste infinito (inalcanzables) que se informan arriba.
 # 
 
-# In[3]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -196,7 +196,7 @@ print("Parámetros de configuración cargados. Los resultados se guardarán en:"
 # 
 # Comprueba, en orden: CRS idénticos (ráster / puntos / máscara), solape espacial de extensiones, y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o nodata). En modo `single_origin` además valida el modo, que haya ≥ 2 puntos y que `ORIGIN_ID` exista (lista los IDs disponibles). Cualquier problema **detiene la ejecución** con un mensaje concreto; nada se calcula con datos incoherentes.
 
-# In[4]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -354,7 +354,7 @@ except Exception as e:
 # 
 # Mapa del ráster de coste en escala **lineal y logarítmica** con los puntos superpuestos, guardado como `visualizacion_diagnostica.png`. Usalo para verificar la configuración antes de lanzar el análisis; en modo `single_origin` el origen aparece resaltado con una estrella.
 
-# In[5]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -442,7 +442,7 @@ except Exception as e:
 # - **Fase 2**: reconstrucción Numba de cada ruta y escritura de `red_completa_unificada.gpkg` (más la capa `destinos_inalcanzables` si los hay).
 # - Imprime `MODO:` con las rutas esperadas y compara al final esperadas vs reales (diferencia = destinos con coste infinito). Si un worker falla, la ejecución **se detiene** antes de escribir el GPKG.
 
-# In[6]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -689,7 +689,10 @@ try:
             gpkg_output_path,
             layer="destinos_inalcanzables",
             driver="GPKG",
-            mode="a" if os.path.exists(gpkg_output_path) else "w",
+            # reemplaza SOLO esta capa en cada corrida (idempotente al re-ejecutar
+            # la Celda 6, p. ej. con RESUME); las demas capas del GPKG
+            # (rutas_unificadas) quedan intactas.
+            mode="w",
         )
         print(
             f"  {len(pares_inf)} destinos inalcanzables escritos en capa 'destinos_inalcanzables'."
@@ -742,7 +745,7 @@ finally:
 # 
 # Carga la red desde memoria (o el GeoPackage), armoniza CRS con el ráster, recorta la ventana con margen y dibuja rutas + nodos sobre el coste en escala logarítmica. Guarda `red_de_rutas_final.png`.
 
-# In[7]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -849,7 +852,7 @@ except Exception as e:
 # 
 # Coloca un punto cada `SPACING_M` metros (25 m por defecto) sobre cada ruta por interpolación vectorizada sobre la longitud acumulada. Guarda `puntos_rutas_<espaciado>m.gpkg` con la columna `route_idx` para trazabilidad. Es la entrada de la Celda 9.
 
-# In[8]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -1015,7 +1018,7 @@ print(f"{'─'*60}")
 # 
 # Estimación de densidad sobre los puntos densificados: grilla con margen = bandwidth, binning numpy, kernel QGIS (`HEATMAP_KERNEL`, quartic por defecto) y convolución FFT con recorte "same". La lógica vive en `_compute_heatmap` (con tests de regresión: pico, georreferenciación y masa). Salidas: GeoTIFF + PNG. Parámetros: `HEATMAP_RES_M`, `HEATMAP_BANDWIDTH_M`, `HEATMAP_KERNEL`.
 
-# In[9]:
+# In[ ]:
 
 
 # ==============================================================================
