@@ -11,6 +11,7 @@ La herramienta calcula el conjunto completo de rutas entre todos los pares de pu
 - Implementa `MCP_Geometric` (scikit-image) como motor de propagación de costes, con soporte de conectividad completa (8 vecinos).
 - Reconstrucción del traceback acelerada con Numba JIT (`@njit`).
 - Análisis N×N deduplicado: para N puntos se calculan N×(N-1)/2 rutas únicas (triángulo superior de la matriz OD), evitando recalcular pares simétricos.
+- **Modo `single_origin` (1 contra todos)**: con `ANALYSIS_MODE = "single_origin"` y un `ORIGIN_ID`, solo se calculan las N−1 rutas desde ese origen hacia el resto (estilo SSSP / `source=` de NetworkX), sin pares entre los destinos. Se elige editando la Celda 3 o desde CLI con `papermill -p` (ver sección propia).
 - **Ejecución paralela en dos fases con joblib** (`loky` backend): el análisis se divide en Fase 1 (calcular y guardar superficies de coste por origen) y Fase 2 (reconstruir rutas desde disco). El número de workers se auto-detecta según la RAM disponible para cada fase. El ráster se comparte mediante un archivo `memmap` en disco.
 - Permite restringir el área de búsqueda a un polígono vectorial (shapefile o GeoPackage) para excluir zonas no accesibles.
 - Acumula todos los resultados en memoria y escribe un único GeoPackage al final, con atributos enriquecidos por ruta.
@@ -93,6 +94,8 @@ Parámetros editables por el usuario:
 | `ALL_POINTS_SHAPEFILE` | Shapefile o GeoPackage con todos los puntos de la red                        |
 | `MASK_SHAPEFILE_PATH`  | Polígono de restricción espacial (`None` para desactivar)                   |
 | `ID_FIELD_NAME`        | Nombre del campo ID en la capa de puntos                                     |
+| `ANALYSIS_MODE`        | `"all_pairs"` (default, N×N) o `"single_origin"` (un origen → todos los demás) |
+| `ORIGIN_ID`            | ID del punto origen; requerido y validado en modo `single_origin`            |
 | `OUTPUT_DIR`           | Carpeta de salida (generada automáticamente con marca de tiempo)             |
 | `VERBOSE`              | `True` imprime detalles por ruta; `False` suprime el ruido                  |
 | `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
@@ -208,6 +211,7 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
    - `ALL_POINTS_SHAPEFILE`: ruta a tus puntos.
    - `MASK_SHAPEFILE_PATH`: ruta al polígono de máscara, o `None`.
    - `ID_FIELD_NAME`: nombre del campo ID en la capa de puntos.
+   - `ANALYSIS_MODE` + `ORIGIN_ID`: modo de análisis (ver sección «Modo single_origin»).
 
 4. Ejecuta las celdas en orden (1 → 9). Las celdas 8 y 9 son post-procesamiento opcional.
 
@@ -218,6 +222,19 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
    - `heatmap_30m_1km_quartic.png`: mapa de calor PNG (Celda 9)
 
 **Para retomar resultados ya calculados**: corre solo las celdas 8 y 9 — autodetectan la última sesión de `output/` (buscan `red_completa_unificada.gpkg` y `puntos_rutas_<espaciado>m.gpkg`) cuando `OUTPUT_DIR` no apunta a una sesión válida.
+
+## Modo single_origin (1 contra todos)
+
+Además del análisis completo N×N, la **Celda 3** permite calcular solo las rutas desde **un punto de origen** hacia todos los demás, sin pares entre los destinos:
+
+- Concepto: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O.
+- Validación temprana en la Celda 4: modo desconocido, `single_origin` sin `ORIGIN_ID` o ID inexistente detienen la ejecución listando los valores válidos / IDs disponibles.
+- En modo `single_origin`, los mapas de las Celdas 5 y 7 resaltan el origen elegido (estrella lime), y la ejecución imprime `MODO: ... | rutas esperadas: N` al arrancar y compara reales vs esperadas al final.
+- La Celda 3 está etiquetada `parameters` (estándar papermill), así que el modo también se elige **sin editar el notebook**:
+
+```sh
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
+```
 
 ## Notas técnicas
 

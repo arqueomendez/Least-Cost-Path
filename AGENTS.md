@@ -84,6 +84,7 @@ Existe una suite de **pytest** en `tests/`:
 | `test_integration.py` | roundtrip Fase 1 → Fase 2 sobre un ráster sintético |
 | `test_notebook_hardening.py` | pins estructurales de los specs S2-S8 del notebook (fuente, sin ejecutarlo) |
 | `test_requirements_export.py` | S15: `requirements.txt` fiel a `uv.lock` y cabecera con el comando generador |
+| `test_star_origin_mode.py` | pins estructurales del modo estrella (S1-S6: enum, validación, rama, echo, resaltado, tag `parameters`) |
 
 ### Ejecutar los tests
 
@@ -121,6 +122,15 @@ uv run jupyter lab
 El notebook principal es `LCP_MCP_Geometric.ipynb`. Ejecuta las celdas en orden
 (1 → 9). Los parámetros de usuario están en **Celda 3** (pipeline principal) y en
 **Celdas 8 y 9** (post-procesamiento: puntos densificados y heatmap).
+
+**Modos de análisis (Celda 3, etiquetada `parameters`)**: `ANALYSIS_MODE = "all_pairs"`
+(default, N×(N−1)/2) o `"single_origin"` + `ORIGIN_ID` (un origen hacia todos los
+demás, sin pares entre destinos — SSSP vs APSP). Ejecución parametrizada sin editar
+el notebook:
+
+```sh
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
+```
 
 Para retomar resultados ya calculados sin reejecutar el pipeline completo, corre
 solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
