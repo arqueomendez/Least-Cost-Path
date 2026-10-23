@@ -671,7 +671,8 @@ try:
         print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
 
     # --- S8: destinos sin ruta materializados en capa aditiva ---
-    # No toca el esquema de 'rutas_unificadas'; mode='a' conserva la capa principal.
+    # No toca el esquema de 'rutas_unificadas'; mode='w' reemplaza SOLO esta capa
+    # en cada corrida (idempotente) y conserva las demas capas del archivo.
     if pares_inf:
         inf_gdf = gpd.GeoDataFrame(
             {

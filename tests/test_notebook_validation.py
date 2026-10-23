@@ -152,14 +152,21 @@ def test_s8_unreachable_layer_is_idempotent_across_reruns(tmp_path):
         )
         return [*srcs, nh.load_code_sources()[5]]
 
-    for _ in range(2):
+    for _ in range(3):
         _out, err = nh.run_code(sources(), timeout=600)
         assert err is None, err
 
     gpkg = tmp_path / "session_idem" / "red_completa_unificada.gpkg"
+    # 3 corridas: exactamente 2 capas (principal intacta), esquema estable y
+    # 4 filas sin duplicados en la capa de inalcanzables.
+    assert sorted(fiona.listlayers(gpkg)) == [
+        "destinos_inalcanzables",
+        "rutas_unificadas",
+    ]
     with fiona.open(gpkg, layer="rutas_unificadas") as src:
         assert len(src) == 2
     with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        assert list(src.schema["properties"]) == ["origin_id", "dest_id", "cost_total"]
         rows = [(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src]
     assert sorted(rows) == [(1, 3), (1, 4), (2, 3), (2, 4)], f"duplicados: {rows}"
 
