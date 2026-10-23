@@ -78,3 +78,18 @@ def test_s8_unreachable_layer_written():
     assert 'layer="destinos_inalcanzables"' in s
     assert "pares_inf" in s
     assert 'mode="a" if os.path.exists' in s
+
+
+def test_s9_resume_wiring():
+    # S9: parametro RESUME en la Celda 3, huella + reutilizacion en la Celda 6
+    # y escalares persistidos por el worker de Fase 1.
+    assert "RESUME = True" in SRC[2]
+    s6 = SRC[5]
+    assert "fingerprint" in s6
+    assert "phase1_meta.json" in s6
+    assert "reusable" in s6
+    assert "RESUME: reutilizando" in s6
+    pf_src = (ROOT / "lcp" / "pathfinder.py").read_text(encoding="utf-8")
+    # kwargs de np.savez_compressed (sin comillas: son argumentos de palabra clave)
+    assert "dest_ids=np.array(" in pf_src
+    assert "cost_scalars=np.array(" in pf_src

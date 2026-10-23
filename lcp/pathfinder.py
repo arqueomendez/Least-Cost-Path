@@ -140,12 +140,16 @@ def compute_and_save_cost_surface(args):
         del costs
 
         npz_path = os.path.join(phase1_dir, f"traceback_{origin_id}.npz")
+        # dest_ids/cost_scalars permiten reanudar (S9) sin recomputar el MCP:
+        # la Fase 2 puede reconstruirse desde el propio npz.
         np.savez_compressed(
             npz_path,
             traceback=traceback,
             offsets=offsets,
             row_offset=np.int32(r_min),
             col_offset=np.int32(c_min),
+            dest_ids=np.array(list(cost_scalars.keys()), dtype=np.int64),
+            cost_scalars=np.array(list(cost_scalars.values()), dtype=np.float64),
         )
         del traceback
 

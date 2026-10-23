@@ -167,6 +167,7 @@ ID_FIELD_NAME = 'id'
 # sin pares entre los destinos (estilo source= de NetworkX).
 ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
+RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 
 # --- 3. Opciones de Almacenamiento ---
 KEEP_PHASE1_FILES = False
@@ -478,6 +479,38 @@ try:
         for pid, coords in all_points.items()
     }
 
+    # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
+    import hashlib
+    import json as _json
+
+    _fp_data = {
+        "mode": ANALYSIS_MODE,
+        "origin": ORIGIN_ID,
+        "points": sorted(
+            (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
+            for k, v in all_points.items()
+        ),
+        "raster_size": os.path.getsize(COST_RASTER_PATH),
+        "raster_mtime": int(os.path.getmtime(COST_RASTER_PATH)),
+    }
+    fingerprint = hashlib.sha256(
+        _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    meta_path = os.path.join(PHASE1_DIR, "phase1_meta.json")
+    _meta_ok = False
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as _fh:
+                _meta_ok = _json.load(_fh).get("fingerprint") == fingerprint
+        except (OSError, ValueError):
+            _meta_ok = False
+    if not _meta_ok:
+        # huella distinta o meta ilegible: los npz previos no sirven
+        shutil.rmtree(PHASE1_DIR, ignore_errors=True)
+        os.makedirs(PHASE1_DIR, exist_ok=True)
+    with open(meta_path, "w", encoding="utf-8") as _fh:
+        _json.dump({"fingerprint": fingerprint}, _fh)
+
     # --- PASO 3: FASE 1 (segun modo de analisis) ---
     if ANALYSIS_MODE == "single_origin":
         # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
@@ -511,17 +544,41 @@ try:
     print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
     print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
-    print(f"  Total de orígenes a procesar: {len(tasks_p1)}")
+    # --- S9: reutilizar tracebacks con huella coincidente (RESUME) ---
+    reusable = {}
+    tasks_p1_run = tasks_p1
+    if RESUME:
+        tasks_p1_run = []
+        for task in tasks_p1:
+            _npz = os.path.join(PHASE1_DIR, f"traceback_{task[0]}.npz")
+            try:
+                with np.load(_npz) as data:
+                    if "dest_ids" not in data.files or "cost_scalars" not in data.files:
+                        raise ValueError("npz sin escalares de coste")
+                    reusable[task[0]] = {
+                        int(d): float(c)
+                        for d, c in zip(data["dest_ids"], data["cost_scalars"])
+                    }
+            except Exception:
+                tasks_p1_run.append(task)
+        if reusable:
+            print(
+                f"  RESUME: reutilizando {len(reusable)} tracebacks de Fase 1 "
+                f"(huella coincide); pendientes: {len(tasks_p1_run)}"
+            )
+
+    print(f"  Total de orígenes a procesar: {len(tasks_p1_run)}")
     t0_p1 = time.time()
 
     results_p1 = Parallel(n_jobs=n_jobs_p1, backend="loky", verbose=5)(
-        delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1
+        delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run
     )
 
     dur_p1 = time.time() - t0_p1
     print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
     cost_scalars_index = {oid: cdict for oid, cdict in results_p1}
+    cost_scalars_index.update(reusable)
     failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
     n_computed = len(cost_scalars_index) - len(failed_origins)
     print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")

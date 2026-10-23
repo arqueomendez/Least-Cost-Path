@@ -79,3 +79,49 @@ def test_cell6_writes_unreachable_layer(tmp_path):
     # ademas: el aviso de reales != esperadas (2 de 6) y el de inalcanzables
     assert "!= esperadas" in out
     assert "inalcanzables" in out
+
+
+def test_cell6_resume_reuses_phase1(tmp_path):
+    # S9 (corrida funcional): dos corridas sobre la MISMA sesion; la segunda
+    # debe reutilizar los 3 tracebacks de Fase 1 (huella coincide, pendientes 0)
+    # y producir exactamente los mismos resultados.
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_barriera.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+
+    def sources():
+        srcs = nh.build_cells_1_to_4(
+            tmp_path,
+            raster=raster,
+            points=pts,
+            mask=None,
+            fixed_output_name="session_resume",
+            keep_phase1=True,
+        )
+        return [*srcs, nh.load_code_sources()[5]]
+
+    # corrida 1: todo fresco, sin reutilizacion
+    out1, err1 = nh.run_code(sources(), timeout=600)
+    assert err1 is None, err1
+    assert "RESUME: reutilizando" not in out1
+
+    # corrida 2: huella coincide -> 3 tracebacks reutilizados, 0 pendientes
+    out2, err2 = nh.run_code(sources(), timeout=600)
+    assert err2 is None, err2
+    assert "RESUME: reutilizando 3 tracebacks" in out2
+    assert "pendientes: 0" in out2
+
+    # resultados identicos a los de la corrida fresca
+    gpkg = tmp_path / "session_resume" / "red_completa_unificada.gpkg"
+    with fiona.open(gpkg, layer="rutas_unificadas") as src:
+        assert len(src) == 2
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        rows = {(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src}
+    assert rows == {(1, 3), (1, 4), (2, 3), (2, 4)}

@@ -118,14 +118,32 @@ def write_points(path, points, crs):
             )
 
 
-def build_cells_1_to_4(tmp_path, raster=None, points=None, mask=None):
-    """Celdas 1-4 con la Celda 3 parchada a fixtures (None = dejar el default)."""
+def build_cells_1_to_4(
+    tmp_path,
+    raster=None,
+    points=None,
+    mask=None,
+    fixed_output_name=None,
+    keep_phase1=False,
+):
+    """Celdas 1-4 con la Celda 3 parchada a fixtures (None = dejar el default).
+
+    fixed_output_name: fija OUTPUT_DIR a un nombre determinista (para tests de
+    reanudacion que necesitan la misma sesion entre corridas).
+    keep_phase1: conserva phase1_tracebacks/ (KEEP_PHASE1_FILES=True).
+    """
     srcs = load_code_sources()
+    if fixed_output_name is None:
+        _output_expr = f"os.path.join({str(tmp_path)!r}, f'session_{{timestamp}}')"
+    else:
+        _output_expr = f"os.path.join({str(tmp_path)!r}, {fixed_output_name!r})"
     reps = {
         "OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')": (
-            f"OUTPUT_DIR = os.path.join({str(tmp_path)!r}, f'session_{{timestamp}}')"
+            f"OUTPUT_DIR = {_output_expr}"
         ),
     }
+    if keep_phase1:
+        reps["KEEP_PHASE1_FILES = False"] = "KEEP_PHASE1_FILES = True"
     if raster is not None:
         reps["COST_RASTER_PATH = os.path.join(DATA_DIR, 'cost.tif')"] = (
             f"COST_RASTER_PATH = {str(raster)!r}"
