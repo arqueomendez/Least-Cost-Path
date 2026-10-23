@@ -132,6 +132,9 @@ el notebook:
 uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
 ```
 
+Una **celda markdown en español** justo antes de la Celda 3 documenta ambos modos
+dentro del notebook (tabla comparativa, cuándo usar cada uno, CLI y salidas).
+
 Para retomar resultados ya calculados sin reejecutar el pipeline completo, corre
 solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
 `OUTPUT_DIR` no apunta a una sesión válida (la Celda 9 busca el archivo
@@ -320,6 +323,9 @@ Worker: `lcp.pathfinder.compute_and_save_cost_surface(args)`
 - Si algún worker falla, la **Celda 6** lista los IDs afectados y **detiene** la
   ejecución antes de la Fase 2 (nunca escribe un GPKG parcial). Los destinos
   inalcanzables (coste `inf`) se informan con sus IDs pero no bloquean.
+- Modo `single_origin`: la Celda 6 construye **un solo task** de Fase 1 (el origen
+  elegido hacia todos los demás, sin filtro `did > origin_id`); la Fase 2 reconstruye
+  N−1 rutas y el resto del flujo (Celdas 7-9) es idéntico.
 
 ### Fase 2 — Reconstruir rutas desde disco
 

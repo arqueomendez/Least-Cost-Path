@@ -105,6 +105,45 @@ def warm_up_numba():
     print("Warm-up completado.")
 
 
+# ## Modos de análisis — `all_pairs` vs `single_origin`
+# 
+# Este notebook calcula rutas de menor coste (`MCP_Geometric` de scikit-image, 8-conectado, coste geométrico) entre los puntos de la red. La **Celda 3** (justo debajo de este texto) permite elegir entre dos modos de análisis:
+# 
+# ### 1. `ANALYSIS_MODE = "all_pairs"` — todos contra todos (default)
+# 
+# - Calcula **todas** las rutas entre **todos** los pares de puntos: para N puntos, N·(N−1)/2 rutas (triángulo superior de la matriz OD). Con los datos de ejemplo (N = 14): **91 rutas**.
+# - Cada origen lanza su propio MCP hacia los destinos con id mayor: el filtro `did > origin_id` es la deduplicación que evita recalcular pares simétricos (la ruta A→B es idéntica a B→A).
+# - **Cuándo usarlo**: cuando necesitás la red completa — matrices OD, corredores entre todos los puntos, densificación de rutas (Celda 8) y mapas de calor (Celda 9).
+# 
+# ### 2. `ANALYSIS_MODE = "single_origin"` — un origen contra todos (modo estrella / SSSP)
+# 
+# - Calcula **solo** las rutas desde el punto `ORIGIN_ID` hacia **todos los demás** puntos, y **ninguna entre los otros puntos**. Con N = 14: **13 rutas**, todas con `origin_id = ORIGIN_ID`.
+# - Equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP): un parámetro que acota el alcance, al estilo de `source=` en NetworkX.
+# - Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O: para ese origen no se pierde información respecto al modo completo.
+# - **Cuándo usarlo**: cuando te interesa **un sitio concreto** — accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, o comparar un origen frente al resto sin pagar el análisis N×N completo (1 MCP en vez de N−1; ~13× más rápido con los datos de ejemplo).
+# 
+# ### Comparación rápida
+# 
+# | | `all_pairs` | `single_origin` |
+# |---|---|---|
+# | Rutas (N=14) | 91 | 13 |
+# | Dedup | filtro `did > origin_id` | `did != ORIGIN_ID` (sin triángulo) |
+# | MCPs en Fase 1 | 13 (uno por origen) | 1 (solo el origen) |
+# | Validación (Celda 4) | CRS, superposición y puntos | + modo válido, `ORIGIN_ID` definido y existente (lista los IDs disponibles) |
+# | Mapas (Celdas 5 y 7) | todos los puntos en rojo | origen resaltado con **estrella** lime |
+# 
+# ### Cómo elegirlo y qué esperar
+# 
+# - Editá `ANALYSIS_MODE` y `ORIGIN_ID` en la **Celda 3** (etiquetada `parameters`), o ejecutalo sin abrir Jupyter:
+# 
+# ```sh
+# uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
+# ```
+# 
+# - **Salida**: el mismo GeoPackage de siempre (`red_completa_unificada.gpkg`) con los mismos campos (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`), solo que con N−1 filas en modo estrella.
+# - La **Celda 6** imprime `MODO: ... | rutas esperadas: N` al arrancar y, al final, compara las rutas reales con las esperadas: si difieren, revisá los destinos con coste infinito (inalcanzables) que se informan arriba.
+# 
+
 # In[3]:
 
 

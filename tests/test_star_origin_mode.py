@@ -125,3 +125,27 @@ def test_s6_papermill_dependency_declared():
     assert '"papermill>=2.7.0"' in pyproject
     reqs = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert re.search(r"^papermill==2\.7\.0", reqs, re.M)
+
+
+def test_s9_markdown_explains_both_modes():
+    # S9: celda markdown en espanol antes de la Celda 3 que explica ambos modos.
+    md_idx = [i for i, c in enumerate(NB.cells) if c.cell_type == "markdown"]
+    assert md_idx, "debe existir al menos una celda markdown"
+    c3_idx = next(
+        i
+        for i, c in enumerate(NB.cells)
+        if c.cell_type == "code" and 'ANALYSIS_MODE = "all_pairs"' in c.source
+    )
+    assert min(md_idx) < c3_idx, "la explicacion debe ir antes de la Celda 3"
+    joined = "\n".join(NB.cells[i].source for i in md_idx)
+    for token in (
+        "all_pairs",
+        "single_origin",
+        "ORIGIN_ID",
+        "papermill",
+        "91",
+        "13",
+        "SSSP",
+        "Cuándo usarlo",
+    ):
+        assert token in joined, token

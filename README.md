@@ -223,18 +223,37 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 
 **Para retomar resultados ya calculados**: corre solo las celdas 8 y 9 — autodetectan la última sesión de `output/` (buscan `red_completa_unificada.gpkg` y `puntos_rutas_<espaciado>m.gpkg`) cuando `OUTPUT_DIR` no apunta a una sesión válida.
 
-## Modo single_origin (1 contra todos)
+## Modos de análisis: all_pairs vs single_origin
 
-Además del análisis completo N×N, la **Celda 3** permite calcular solo las rutas desde **un punto de origen** hacia todos los demás, sin pares entre los destinos:
+La **Celda 3** (precedida de una celda markdown que explica ambos modos **dentro del propio notebook**) permite elegir entre dos modos:
 
-- Concepto: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O.
-- Validación temprana en la Celda 4: modo desconocido, `single_origin` sin `ORIGIN_ID` o ID inexistente detienen la ejecución listando los valores válidos / IDs disponibles.
-- En modo `single_origin`, los mapas de las Celdas 5 y 7 resaltan el origen elegido (estrella lime), y la ejecución imprime `MODO: ... | rutas esperadas: N` al arrancar y compara reales vs esperadas al final.
-- La Celda 3 está etiquetada `parameters` (estándar papermill), así que el modo también se elige **sin editar el notebook**:
+| | `all_pairs` (default) | `single_origin` (estrella / SSSP) |
+|---|---|---|
+| Qué calcula | Todas las rutas entre todos los pares | Solo las rutas desde `ORIGIN_ID` hacia todos los demás; ninguna entre los otros puntos |
+| Rutas con N=14 | N·(N−1)/2 = **91** | N−1 = **13** |
+| MCPs en Fase 1 | N−1 = 13 (uno por origen) | **1** (solo el origen) |
+| Dedup | filtro `did > origin_id` (triángulo superior OD) | `did != ORIGIN_ID` (sin triángulo) |
+| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto |
+| Mapas (C5/C7) | todos los puntos en rojo | origen resaltado con estrella lime |
+
+**Concepto**: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O: en modo estrella no se pierde información para ese origen.
+
+**Selección** — editando la Celda 3 (etiquetada `parameters`) o sin abrir el notebook:
 
 ```sh
+# modo estrella
 uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
+# modo completo (equivalente al default)
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 ```
+
+**Validación (Celda 4)**: modo desconocido, `single_origin` sin `ORIGIN_ID` o ID inexistente detienen la ejecución listando los valores válidos / IDs disponibles.
+
+**Salida**: el mismo `red_completa_unificada.gpkg` con los mismos campos (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`) — con N−1 filas en modo estrella. La Celda 6 imprime `MODO: ... | rutas esperadas: N` al arrancar y compara reales vs esperadas al final (si difieren: destinos con coste infinito, informados con sus IDs).
+
+**Rendimiento**: el modo estrella ejecuta 1 MCP en vez de N−1 (con los datos de ejemplo, Fase 1 de ~1,9 s a ~0,2 s y un solo worker).
+
+**Casos límite**: `N = 1` en modo estrella genera un task degenerado (fuera del dominio previsto); los destinos inalcanzables no bloquean pero se informan con sus IDs.
 
 ## Notas técnicas
 
