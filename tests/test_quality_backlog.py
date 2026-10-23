@@ -116,3 +116,10 @@ def test_s10_markdown_before_every_code_cell():
         "_compute_heatmap",
     ):
         assert token in joined, token
+
+
+def test_s11_nbstripout_declared():
+    # S11: politica de outputs — nbstripout como dependencia dev (el filtro
+    # local de git se instala con `nbstripout --install`; config no trackeada).
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"nbstripout' in pyproject

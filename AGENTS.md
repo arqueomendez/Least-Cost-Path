@@ -143,6 +143,12 @@ solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
 `LCP_MCP_Geometric.py` se regenera desde el notebook con
 `uv run jupyter nbconvert --to script LCP_MCP_Geometric.ipynb`; no lo edites a mano.
 
+**Outputs no commiteados**: `nbstripout` (dependencia dev) está instalado como
+filtro **local** de git (`nbstripout --install` → filtro `filter.nbstripout` +
+`.git/info/attributes`; solo config local, sin CI) — `git add` limpia los outputs
+del notebook automáticamente. La evidencia de cada corrida vive en los
+`_exec_*.ipynb` (ignorados por `.gitignore`) o en la salida de `run_notebook.py`.
+
 ---
 
 ## 5. Arquitectura del módulo `lcp/`

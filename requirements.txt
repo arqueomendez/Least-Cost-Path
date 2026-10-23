@@ -1034,7 +1034,11 @@ nbformat==5.10.4 \
     #   jupyter-server
     #   nbclient
     #   nbconvert
+    #   nbstripout
     #   papermill
+nbstripout==0.9.1 \
+    --hash=sha256:313bbb4217c8e38998567e5d790b6bd6c3a17a8c39073b205b84dadfc5d756dc \
+    --hash=sha256:ca027ee45742ee77e4f8e9080254f9a707f1161ba11367b82fdf4a29892c759e
 nest-asyncio==1.6.0 \
     --hash=sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe \
     --hash=sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c
