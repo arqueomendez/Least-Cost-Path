@@ -5,7 +5,7 @@ authors:
     given-names: "Víctor" # Reemplazar con el nombre real del autor
     orcid: "https://orcid.org/0000-0002-3453-3708" # Opcional, pero recomendado
 title: "Least-Cost-Path: A Python tool for Least Cost Path analysis in archaeology"
-date-released: 2025-09-18 # Fecha de la publicación o del último cambio importante
+date-released: 2026-10-23 # Fecha de la publicación o del último cambio importante
 repository-code: "https://github.com/arqueomendez/Least-Cost-Path"
 keywords:
   - "Least Cost Path"

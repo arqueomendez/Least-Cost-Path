@@ -308,6 +308,11 @@ output/session_<timestamp>_Refactored/
 `phase1_tracebacks/` se elimina automáticamente al finalizar si `KEEP_PHASE1_FILES = False`
 (parámetro en Celda 3 del notebook).
 
+**Limpieza de sesiones**: la carpeta `output/` acumula sesiones locales
+(ignorada por git). No hay limpieza automática: cuando ya no necesites
+sesiones viejas, borralas a mano (explorador o `Remove-Item -Recurse
+output/session_<timestamp>`) — una sesión puede ocupar decenas de MB.
+
 ---
 
 ## 9. Arquitectura de dos fases (Celda 6)
