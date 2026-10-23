@@ -105,7 +105,7 @@ def warm_up_numba():
     print("Warm-up completado.")
 
 
-# In[5]:
+# In[3]:
 
 
 # ==============================================================================
@@ -122,7 +122,14 @@ ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'points.shp')
 MASK_SHAPEFILE_PATH = os.path.join(DATA_DIR, 'area-mask.shp')
 ID_FIELD_NAME = 'id'
 
-# --- 2. Opciones de Almacenamiento ---
+# --- 2. Modo de analisis ---
+# "all_pairs": matriz completa N x N (triangulo superior OD) - comportamiento historico.
+# "single_origin": UN solo origen ORIGIN_ID hacia todos los demas puntos (SSSP),
+# sin pares entre los destinos (estilo source= de NetworkX).
+ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin"
+ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
+
+# --- 3. Opciones de Almacenamiento ---
 KEEP_PHASE1_FILES = False
 VERBOSE = False
 
@@ -136,7 +143,7 @@ except OSError as e:
 print("Parámetros de configuración cargados. Los resultados se guardarán en:", OUTPUT_DIR)
 
 
-# In[6]:
+# In[4]:
 
 
 # ==============================================================================
@@ -145,6 +152,15 @@ print("Parámetros de configuración cargados. Los resultados se guardarán en:"
 from pyproj import CRS  # comparación de CRS robusta entre clases fiona/rasterio
 
 print("\n--- VERIFICANDO LA COHERENCIA DE TODOS LOS DATOS DE ENTRADA ---")
+
+# --- Validacion del modo de analisis (S3): fallar temprano y con mensajes claros ---
+_VALID_MODES = ("all_pairs", "single_origin")
+if ANALYSIS_MODE not in _VALID_MODES:
+    raise ValueError(
+        f"ANALYSIS_MODE invalido: {ANALYSIS_MODE!r}. Modos validos: {_VALID_MODES}"
+    )
+if ANALYSIS_MODE == "single_origin" and ORIGIN_ID is None:
+    raise ValueError("Modo single_origin requiere definir ORIGIN_ID en la Celda 3.")
 
 main_search_mask = None
 invalid_point_ids = []
@@ -234,6 +250,11 @@ try:
         all_points_for_validation, _ = dl.load_points_as_dict(
             ALL_POINTS_SHAPEFILE, ID_FIELD_NAME
         )
+        if ANALYSIS_MODE == "single_origin" and ORIGIN_ID not in all_points_for_validation:
+            raise ValueError(
+                f"ORIGIN_ID {ORIGIN_ID!r} no existe. "
+                f"IDs disponibles: {sorted(all_points_for_validation)}"
+            )
         for point_id, coords in all_points_for_validation.items():
             row, col = rasterio.transform.rowcol(src.transform, coords[0], coords[1])
             if not (0 <= row < src.height and 0 <= col < src.width) \
@@ -271,7 +292,7 @@ except Exception as e:
     raise
 
 
-# In[7]:
+# In[5]:
 
 
 # ==============================================================================
@@ -317,6 +338,20 @@ try:
         ax2.scatter(point_pixels_x, point_pixels_y, c='red', edgecolor='black', s=50, label='Puntos de Análisis', zorder=5)
         ax2.legend()
 
+        # Resaltar el origen en modo single_origin (S5; seleccion simple, no interactiva)
+        if (
+            "ANALYSIS_MODE" in globals()
+            and ANALYSIS_MODE == "single_origin"
+            and "all_points_for_validation" in globals()
+            and ORIGIN_ID in all_points_for_validation
+        ):
+            _ox, _oy = all_points_for_validation[ORIGIN_ID]
+            _orow, _ocol = rasterio.transform.rowcol(transform, _ox, _oy)
+            for _ax in (ax1, ax2):
+                _ax.scatter([_ocol], [_orow], c='lime', edgecolor='black', s=400,
+                            marker="*", zorder=6, label=f'Origen {ORIGIN_ID}')
+                _ax.legend()
+
         # Ajustes finales
         plt.tight_layout()
 
@@ -339,7 +374,7 @@ except Exception as e:
     traceback.print_exc()
 
 
-# In[8]:
+# In[6]:
 
 
 # ==============================================================================
@@ -399,20 +434,38 @@ try:
         for pid, coords in all_points.items()
     }
 
-    # --- PASO 3: FASE 1 ---
-    n_jobs_p1 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=1)
-    print(f"\n[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
-
-    for origin_id, origin_coords in all_points.items():
+    # --- PASO 3: FASE 1 (segun modo de analisis) ---
+    if ANALYSIS_MODE == "single_origin":
+        # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
+        # puntos; sin filtro did > origin_id (los ids menores tambien corresponden)
+        # y sin pares entre los destinos.
+        n_expected = len(all_points) - 1
+        origin_coords = all_points[ORIGIN_ID]
         origin_pixel = proc.world_to_pixel(transform, origin_coords[0], origin_coords[1])
-        dest_pixels = {
-            did: dest_pixels_all[did] for did in all_points if did > origin_id
-        }
-        if not dest_pixels:
-            # El origen de mayor id no tiene destinos: evitamos un Dijkstra global
-            # inútil y un .npz enorme que la Fase 2 descartaría.
-            continue
-        tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+        dest_pixels = {did: dest_pixels_all[did] for did in all_points if did != ORIGIN_ID}
+        tasks_p1.append((ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+    else:
+        # all_pairs: N x (N-1) / 2 via filtro did > origin_id (triangulo superior).
+        n_expected = len(all_points) * (len(all_points) - 1) // 2
+        for origin_id, origin_coords in all_points.items():
+            origin_pixel = proc.world_to_pixel(transform, origin_coords[0], origin_coords[1])
+            dest_pixels = {
+                did: dest_pixels_all[did] for did in all_points if did > origin_id
+            }
+            if not dest_pixels:
+                # El origen de mayor id no tiene destinos: evitamos un Dijkstra global
+                # inutil y un .npz enorme que la Fase 2 descartaria.
+                continue
+            tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+
+    n_jobs_p1 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=1)
+    modo_desc = (
+        f"single_origin (origen {ORIGIN_ID})"
+        if ANALYSIS_MODE == "single_origin"
+        else "all_pairs (N x N)"
+    )
+    print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
+    print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
     print(f"  Total de orígenes a procesar: {len(tasks_p1)}")
     t0_p1 = time.time()
@@ -491,6 +544,12 @@ try:
         routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
         print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
 
+    print(f"  Rutas escritas: {len(all_route_records)} | esperadas: {n_expected}")
+    if len(all_route_records) != n_expected:
+        print(
+            f"  ADVERTENCIA: rutas reales {len(all_route_records)} != esperadas {n_expected}; "
+            "revisa los pares con coste infinito informados arriba."
+        )
     pipeline_ok = True
     total_duration = dur_p1 + dur_p2
     print("\n" + "="*60)
@@ -528,7 +587,7 @@ finally:
         print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR} ({motivo})")
 
 
-# In[9]:
+# In[7]:
 
 
 # ==============================================================================
@@ -603,6 +662,18 @@ try:
         points_gdf.plot(ax=ax, color='yellow', markersize=50, ec='black',
                         label='Nodos de la Red', zorder=5)
 
+        # Resaltar el origen en modo single_origin (S5; seleccion simple, no interactiva)
+        if (
+            "ANALYSIS_MODE" in globals()
+            and ANALYSIS_MODE == "single_origin"
+            and "all_points_for_validation" in globals()
+            and ORIGIN_ID in all_points_for_validation
+        ):
+            _ox, _oy = all_points_for_validation[ORIGIN_ID]
+            ax.scatter([_ox], [_oy], c='lime', edgecolor='black', s=400,
+                       marker="*", zorder=6, label=f'Origen {ORIGIN_ID}')
+            ax.legend()
+
         ax.set_title('Red Completa de Rutas de Menor Costo', fontsize=20)
         ax.set_xlabel("Coordenada X"); ax.set_ylabel("Coordenada Y")
         ax.legend(); plt.grid(True, linestyle='--', alpha=0.5)
@@ -619,7 +690,7 @@ except Exception as e:
     tb.print_exc()
 
 
-# In[10]:
+# In[8]:
 
 
 # ==============================================================================
@@ -781,7 +852,7 @@ print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1
 print(f"{'─'*60}")
 
 
-# In[12]:
+# In[9]:
 
 
 # ==============================================================================
