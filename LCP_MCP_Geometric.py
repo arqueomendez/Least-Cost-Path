@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# ## Celda 1 — Importaciones y módulos
+# 
+# Carga las librerías del proyecto (rasterio, fiona, geopandas, joblib, matplotlib, psutil) y los módulos del paquete `lcp/` (`data_loader`, `processing`, `pathfinder`, `utils`, `postprocessing`). Si falla esta celda, el entorno no está sincronizado: ejecutá `uv sync`.
+
 # In[1]:
 
 
@@ -35,6 +39,11 @@ import lcp.postprocessing as postp
 
 print("Módulos cargados exitosamente.")
 
+
+# ## Celda 2 — Funciones de soporte
+# 
+# - `_calculate_n_jobs_for_phase`: estima cuántos workers caben según la RAM disponible (Fase 1 ≈ `raster × 5.5` por worker; Fase 2 ≈ 80 MB; tope de 61 procesos en Windows).
+# - `warm_up_numba`: pre-compila la reconstrucción JIT antes del bucle principal y verifica que los offsets de `MCP_Geometric` sigan siendo los esperados.
 
 # In[2]:
 
@@ -167,6 +176,7 @@ ID_FIELD_NAME = 'id'
 # sin pares entre los destinos (estilo source= de NetworkX).
 ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
+RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 
 # --- 3. Opciones de Almacenamiento ---
 KEEP_PHASE1_FILES = False
@@ -181,6 +191,10 @@ except OSError as e:
 
 print("Parámetros de configuración cargados. Los resultados se guardarán en:", OUTPUT_DIR)
 
+
+# ## Celda 4 — Verificación de coherencia de los datos
+# 
+# Comprueba, en orden: CRS idénticos (ráster / puntos / máscara), solape espacial de extensiones, y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o nodata). En modo `single_origin` además valida el modo, que haya ≥ 2 puntos y que `ORIGIN_ID` exista (lista los IDs disponibles). Cualquier problema **detiene la ejecución** con un mensaje concreto; nada se calcula con datos incoherentes.
 
 # In[4]:
 
@@ -289,6 +303,11 @@ try:
         all_points_for_validation, _ = dl.load_points_as_dict(
             ALL_POINTS_SHAPEFILE, ID_FIELD_NAME
         )
+        if ANALYSIS_MODE == "single_origin" and len(all_points_for_validation) < 2:
+            raise ValueError(
+                "Modo single_origin requiere al menos 2 puntos (N >= 2); "
+                f"se cargaron {len(all_points_for_validation)}."
+            )
         if ANALYSIS_MODE == "single_origin" and ORIGIN_ID not in all_points_for_validation:
             raise ValueError(
                 f"ORIGIN_ID {ORIGIN_ID!r} no existe. "
@@ -330,6 +349,10 @@ except Exception as e:
     print(f"Ocurrió un error inesperado durante la validación de datos: {e}")
     raise
 
+
+# ## Celda 5 — Visualización diagnóstica
+# 
+# Mapa del ráster de coste en escala **lineal y logarítmica** con los puntos superpuestos, guardado como `visualizacion_diagnostica.png`. Usalo para verificar la configuración antes de lanzar el análisis; en modo `single_origin` el origen aparece resaltado con una estrella.
 
 # In[5]:
 
@@ -413,6 +436,12 @@ except Exception as e:
     traceback.print_exc()
 
 
+# ## Celda 6 — Ejecución en dos fases
+# 
+# - **Fase 1**: un `MCP_Geometric` por origen (solo el origen elegido en modo estrella) que guarda traceback **y escalares** en `phase1_tracebacks/`. Con `RESUME = True`, si la huella (puntos + ráster + modo) coincide se reutilizan los `.npz` existentes y solo se computan los pendientes.
+# - **Fase 2**: reconstrucción Numba de cada ruta y escritura de `red_completa_unificada.gpkg` (más la capa `destinos_inalcanzables` si los hay).
+# - Imprime `MODO:` con las rutas esperadas y compara al final esperadas vs reales (diferencia = destinos con coste infinito). Si un worker falla, la ejecución **se detiene** antes de escribir el GPKG.
+
 # In[6]:
 
 
@@ -473,6 +502,38 @@ try:
         for pid, coords in all_points.items()
     }
 
+    # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
+    import hashlib
+    import json as _json
+
+    _fp_data = {
+        "mode": ANALYSIS_MODE,
+        "origin": ORIGIN_ID,
+        "points": sorted(
+            (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
+            for k, v in all_points.items()
+        ),
+        "raster_size": os.path.getsize(COST_RASTER_PATH),
+        "raster_mtime": int(os.path.getmtime(COST_RASTER_PATH)),
+    }
+    fingerprint = hashlib.sha256(
+        _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    meta_path = os.path.join(PHASE1_DIR, "phase1_meta.json")
+    _meta_ok = False
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as _fh:
+                _meta_ok = _json.load(_fh).get("fingerprint") == fingerprint
+        except (OSError, ValueError):
+            _meta_ok = False
+    if not _meta_ok:
+        # huella distinta o meta ilegible: los npz previos no sirven
+        shutil.rmtree(PHASE1_DIR, ignore_errors=True)
+        os.makedirs(PHASE1_DIR, exist_ok=True)
+    with open(meta_path, "w", encoding="utf-8") as _fh:
+        _json.dump({"fingerprint": fingerprint}, _fh)
+
     # --- PASO 3: FASE 1 (segun modo de analisis) ---
     if ANALYSIS_MODE == "single_origin":
         # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
@@ -506,17 +567,41 @@ try:
     print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
     print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
-    print(f"  Total de orígenes a procesar: {len(tasks_p1)}")
+    # --- S9: reutilizar tracebacks con huella coincidente (RESUME) ---
+    reusable = {}
+    tasks_p1_run = tasks_p1
+    if RESUME:
+        tasks_p1_run = []
+        for task in tasks_p1:
+            _npz = os.path.join(PHASE1_DIR, f"traceback_{task[0]}.npz")
+            try:
+                with np.load(_npz) as data:
+                    if "dest_ids" not in data.files or "cost_scalars" not in data.files:
+                        raise ValueError("npz sin escalares de coste")
+                    reusable[task[0]] = {
+                        int(d): float(c)
+                        for d, c in zip(data["dest_ids"], data["cost_scalars"])
+                    }
+            except Exception:
+                tasks_p1_run.append(task)
+        if reusable:
+            print(
+                f"  RESUME: reutilizando {len(reusable)} tracebacks de Fase 1 "
+                f"(huella coincide); pendientes: {len(tasks_p1_run)}"
+            )
+
+    print(f"  Total de orígenes a procesar: {len(tasks_p1_run)}")
     t0_p1 = time.time()
 
     results_p1 = Parallel(n_jobs=n_jobs_p1, backend="loky", verbose=5)(
-        delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1
+        delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run
     )
 
     dur_p1 = time.time() - t0_p1
     print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
     cost_scalars_index = {oid: cdict for oid, cdict in results_p1}
+    cost_scalars_index.update(reusable)
     failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
     n_computed = len(cost_scalars_index) - len(failed_origins)
     print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
@@ -530,17 +615,19 @@ try:
             "Revisa los mensajes 'ERROR Fase 1' de arriba; no se escribira ningun GPKG."
         )
 
-    # Destinos inalcanzables (coste infinito): se informan, no bloquean.
+    # Destinos inalcanzables (coste infinito): se informan, no bloquean, y en
+    # el Paso 5 se materializan en una capa aditiva del GPKG (S8).
     pares_inf = [
-        f"{oid}->{did}"
+        (oid, did)
         for oid, cdict in cost_scalars_index.items()
         for did, cval in cdict.items()
         if not np.isfinite(cval)
     ]
     if pares_inf:
+        muestra = ", ".join(f"{oid}->{did}" for oid, did in pares_inf[:10])
         print(
             f"  ADVERTENCIA: {len(pares_inf)} par(es) origen-destino con coste "
-            f"infinito (inalcanzables). Muestra: {', '.join(pares_inf[:10])}"
+            f"infinito (inalcanzables). Muestra: {muestra}"
             f"{'...' if len(pares_inf) > 10 else ''}."
         )
 
@@ -582,6 +669,31 @@ try:
         routes_gdf = gpd.GeoDataFrame(all_route_records, crs=raster_crs)
         routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
         print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
+
+    # --- S8: destinos sin ruta materializados en capa aditiva ---
+    # No toca el esquema de 'rutas_unificadas'; mode='a' conserva la capa principal.
+    if pares_inf:
+        inf_gdf = gpd.GeoDataFrame(
+            {
+                "origin_id": [int(o) for o, _ in pares_inf],
+                "dest_id": [int(d) for _, d in pares_inf],
+                "cost_total": [float("inf")] * len(pares_inf),
+            },
+            geometry=gpd.points_from_xy(
+                [all_points[d][0] for _, d in pares_inf],
+                [all_points[d][1] for _, d in pares_inf],
+            ),
+            crs=raster_crs,
+        )
+        inf_gdf.to_file(
+            gpkg_output_path,
+            layer="destinos_inalcanzables",
+            driver="GPKG",
+            mode="a" if os.path.exists(gpkg_output_path) else "w",
+        )
+        print(
+            f"  {len(pares_inf)} destinos inalcanzables escritos en capa 'destinos_inalcanzables'."
+        )
 
     print(f"  Rutas escritas: {len(all_route_records)} | esperadas: {n_expected}")
     if len(all_route_records) != n_expected:
@@ -625,6 +737,10 @@ finally:
         )
         print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR} ({motivo})")
 
+
+# ## Celda 7 — Mapa final de la red
+# 
+# Carga la red desde memoria (o el GeoPackage), armoniza CRS con el ráster, recorta la ventana con margen y dibuja rutas + nodos sobre el coste en escala logarítmica. Guarda `red_de_rutas_final.png`.
 
 # In[7]:
 
@@ -728,6 +844,10 @@ except Exception as e:
     import traceback as tb
     tb.print_exc()
 
+
+# ## Celda 8 — Puntos densificados sobre las rutas
+# 
+# Coloca un punto cada `SPACING_M` metros (25 m por defecto) sobre cada ruta por interpolación vectorizada sobre la longitud acumulada. Guarda `puntos_rutas_<espaciado>m.gpkg` con la columna `route_idx` para trazabilidad. Es la entrada de la Celda 9.
 
 # In[8]:
 
@@ -891,6 +1011,10 @@ print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1
 print(f"{'─'*60}")
 
 
+# ## Celda 9 — Mapa de calor (KDE estilo QGIS)
+# 
+# Estimación de densidad sobre los puntos densificados: grilla con margen = bandwidth, binning numpy, kernel QGIS (`HEATMAP_KERNEL`, quartic por defecto) y convolución FFT con recorte "same". La lógica vive en `_compute_heatmap` (con tests de regresión: pico, georreferenciación y masa). Salidas: GeoTIFF + PNG. Parámetros: `HEATMAP_RES_M`, `HEATMAP_BANDWIDTH_M`, `HEATMAP_KERNEL`.
+
 # In[9]:
 
 
@@ -938,69 +1062,88 @@ if 'OUTPUT_DIR' not in globals() or not os.path.exists(os.path.join(OUTPUT_DIR, 
 points_path = os.path.join(OUTPUT_DIR, _PUNTOS_NAME)
 points_gdf = gpd.read_file(points_path)
 
+def _compute_heatmap(coords, minx, miny, maxx, maxy, res, bandwidth, kernel_name):
+    """Binning + kernel QGIS + convolucion FFT -> (heatmap, pixel_size_x, pixel_size_y).
+
+    Extraido de la Celda 9 sin cambios matematicos para poder testear la
+    regresion KDE/FFT (pico del punto, georreferenciacion y masa del kernel).
+    coords: array (N,2) en coordenadas de mundo; los bounds definen la grilla
+    (el caller agrega el margen = bandwidth).
+    """
+    # --- Grilla: el tamano del pixel se deriva de los bounds (NO de res) ---
+    width = int(np.ceil((maxx - minx) / res))
+    height = int(np.ceil((maxy - miny) / res))
+    pixel_size_x = (maxx - minx) / width
+    pixel_size_y = (maxy - miny) / height
+
+    # --- 2. Numpy binning vectorizado (usa el MISMO pixel_size del raster) ---
+    cols = ((coords[:, 0] - minx) / pixel_size_x).astype(np.int32)
+    rows = ((maxy - coords[:, 1]) / pixel_size_y).astype(np.int32)
+    valid = (cols >= 0) & (cols < width) & (rows >= 0) & (rows < height)
+
+    count_grid = np.zeros((height, width), dtype=np.float64)
+    np.add.at(count_grid, (rows[valid], cols[valid]), 1)
+
+    # --- 3. Kernel de QGIS (usando pixel_size real, no res) ---
+    ps = (pixel_size_x + pixel_size_y) / 2.0
+    radius_px = int(np.ceil(bandwidth / ps))
+    y, x = np.ogrid[-radius_px:radius_px + 1, -radius_px:radius_px + 1]
+    dist_px = np.sqrt(x**2 + y**2)
+    u = (dist_px * ps) / bandwidth
+
+    if kernel_name == "quartic":
+        kernel = np.where(u <= 1, (15.0 / 16.0) * (1 - u**2) ** 2, 0.0)
+    elif kernel_name == "gaussian":
+        kernel = np.exp(-0.5 * u**2)
+    elif kernel_name == "triangular":
+        kernel = np.where(u <= 1, 1 - u, 0.0)
+    elif kernel_name == "uniform":
+        kernel = np.where(u <= 1, 1.0, 0.0)
+    else:
+        raise ValueError(f"Kernel no soportado: {kernel_name}")
+
+    kernel_area = np.sum(kernel) * (ps**2)
+    kernel = kernel / kernel_area
+
+    # --- 4. Convolucion via FFT (scipy.fft) + recorte "same" ---
+    count_padded = np.pad(count_grid, pad_width=radius_px, mode="constant")
+    kernel_padded = np.zeros_like(count_padded)
+    kh, kw = kernel.shape
+    kernel_padded[:kh, :kw] = kernel
+
+    fft_grid = rfft2(count_padded)
+    fft_kernel = rfft2(kernel_padded)
+    fft_result = fft_grid * fft_kernel
+    heatmap = irfft2(fft_result, s=count_padded.shape)
+
+    heatmap = heatmap[
+        2 * radius_px : 2 * radius_px + height, 2 * radius_px : 2 * radius_px + width
+    ]
+    return heatmap, pixel_size_x, pixel_size_y
+
+
 # --- 1. Extensión con margen = bandwidth (evita efectos de borde) ---
 minx, miny, maxx, maxy = points_gdf.total_bounds
 margin = HEATMAP_BANDWIDTH_M
 minx -= margin; miny -= margin; maxx += margin; maxy += margin
 
-width  = int(np.ceil((maxx - minx) / HEATMAP_RES_M))
-height = int(np.ceil((maxy - miny) / HEATMAP_RES_M))
-# from_bounds con paso exacto: truncamos el bounding box a multiplos exactos de HEATMAP_RES_M
-# para que el tamano del pixel en el raster coincida exactamente con el paso del binning
-pixel_size_x = (maxx - minx) / width
-pixel_size_y = (maxy - miny) / height
+# --- 2-4. Grilla + binning + kernel + FFT: extraido a _compute_heatmap ---
+# (mismas formulas; ver el docstring. Los prints de resultado quedan abajo.)
+print("  Rasterizando puntos via numpy binning...")
+print("  Aplicando kernel via FFT...")
+coords = get_coordinates(points_gdf.geometry)
+heatmap, pixel_size_x, pixel_size_y = _compute_heatmap(
+    coords, minx, miny, maxx, maxy,
+    HEATMAP_RES_M, HEATMAP_BANDWIDTH_M, HEATMAP_KERNEL,
+)
+width, height = heatmap.shape[1], heatmap.shape[0]
 transform = from_bounds(minx, miny, maxx, maxy, width, height)
+ps = (pixel_size_x + pixel_size_y) / 2.0
+radius_px = int(np.ceil(HEATMAP_BANDWIDTH_M / ps))
 
 print(f"  Grid: {width} × {height} celdas ({width*height/1e6:.1f} Mpx)")
 print(f"  Pixel real: {pixel_size_x:.4f} × {pixel_size_y:.4f} m")
-
-# --- 2. Numpy binning vectorizado (reemplaza rasterio.rasterize) ---
-# Usar el mismo pixel_size que from_bounds para que grid de datos y raster coincidan
-print("  Rasterizando puntos via numpy binning...")
-coords = get_coordinates(points_gdf.geometry)
-cols = ((coords[:, 0] - minx) / pixel_size_x).astype(np.int32)
-rows = ((maxy - coords[:, 1]) / pixel_size_y).astype(np.int32)
-valid = (cols >= 0) & (cols < width) & (rows >= 0) & (rows < height)
-
-count_grid = np.zeros((height, width), dtype=np.float64)
-np.add.at(count_grid, (rows[valid], cols[valid]), 1)
-
-# --- 3. Construir kernel de QGIS (usando pixel_size real) ---
-ps = (pixel_size_x + pixel_size_y) / 2.0
-radius_px = int(np.ceil(HEATMAP_BANDWIDTH_M / ps))
-y, x = np.ogrid[-radius_px:radius_px+1, -radius_px:radius_px+1]
-dist_px = np.sqrt(x**2 + y**2)
-u = (dist_px * ps) / HEATMAP_BANDWIDTH_M
-
-if HEATMAP_KERNEL == "quartic":
-    kernel = np.where(u <= 1, (15.0 / 16.0) * (1 - u**2)**2, 0.0)
-elif HEATMAP_KERNEL == "gaussian":
-    kernel = np.exp(-0.5 * u**2)
-elif HEATMAP_KERNEL == "triangular":
-    kernel = np.where(u <= 1, 1 - u, 0.0)
-elif HEATMAP_KERNEL == "uniform":
-    kernel = np.where(u <= 1, 1.0, 0.0)
-else:
-    raise ValueError(f"Kernel no soportado: {HEATMAP_KERNEL}")
-
-kernel_area = np.sum(kernel) * (ps ** 2)
-kernel = kernel / kernel_area
-
-print(f"  Kernel size: {kernel.shape[0]} × {kernel.shape[1]} px")
-
-# --- 4. Convolución via FFT (scipy.fft con MKL backend) ---
-print("  Aplicando kernel via FFT...")
-count_padded = np.pad(count_grid, pad_width=radius_px, mode='constant')
-kernel_padded = np.zeros_like(count_padded)
-kh, kw = kernel.shape
-kernel_padded[:kh, :kw] = kernel
-
-fft_grid = rfft2(count_padded)
-fft_kernel = rfft2(kernel_padded)
-fft_result = fft_grid * fft_kernel
-heatmap = irfft2(fft_result, s=count_padded.shape)
-
-heatmap = heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]
+print(f"  Kernel size: {2*radius_px+1} × {2*radius_px+1} px")
 
 # --- 5. Guardar GeoTIFF ---
 heatmap_tif = os.path.join(OUTPUT_DIR, f'heatmap_{HEATMAP_RES_M}m_{int(HEATMAP_BANDWIDTH_M/1000)}km_{HEATMAP_KERNEL}.tif')

@@ -15,6 +15,34 @@ def _px_to_world(pixel):
     return (pixel[1] + 0.5, -(pixel[0] + 0.5))
 
 
+def test_phase1_npz_stores_cost_scalars(tmp_path):
+    """S9: el npz de Fase 1 persiste los escalares por destino para poder
+    reanudar sin recomputar el MCP."""
+    memmap_path = str(tmp_path / "raster.dat")
+    mm = np.memmap(memmap_path, dtype=np.float64, mode="w+", shape=SHAPE)
+    mm[:] = 1.0
+    mm.flush()
+    del mm
+    phase1_dir = str(tmp_path / "phase1")
+    os.makedirs(phase1_dir)
+    shared = {
+        "memmap_path": memmap_path,
+        "raster_dtype": np.float64,
+        "raster_shape": SHAPE,
+    }
+    _, costs = pf.compute_and_save_cost_surface(
+        (1, (2, 2), {5: (10, 10)}, shared, phase1_dir)
+    )
+    with np.load(os.path.join(phase1_dir, "traceback_1.npz")) as data:
+        assert "dest_ids" in data.files
+        assert "cost_scalars" in data.files
+        stored = {
+            int(d): float(c) for d, c in zip(data["dest_ids"], data["cost_scalars"])
+        }
+    assert set(stored) == {5}
+    assert stored[5] == pytest.approx(costs[5])
+
+
 def test_phase1_phase2_roundtrip(tmp_path):
     memmap_path = str(tmp_path / "raster.dat")
     mm = np.memmap(memmap_path, dtype=np.float64, mode="w+", shape=SHAPE)

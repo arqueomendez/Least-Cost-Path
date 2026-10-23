@@ -1,11 +1,9 @@
 r"""
-Script temporal de sesion - NO forma parte del proyecto.
-Ejecuta LCP_MCP_Geometric.ipynb directamente con nbclient (sin browser).
+Ejecuta LCP_MCP_Geometric.ipynb de forma no interactiva con nbconvert
+(sin browser; timeout 30 min por celda). Documentado en README y AGENTS.md.
 
 Uso:
-    python run_notebook.py          <- con Python 3.13 del sistema
-  o bien:
-    .venv\Scripts\python run_notebook.py
+    uv run python run_notebook.py
 """
 
 import os

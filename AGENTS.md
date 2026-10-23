@@ -39,7 +39,8 @@ que `pyproject.toml` y `uv.lock` quedan actualizados.
 
 ## 2. Linting y formato
 
-El proyecto usa **ruff** (v0.12.5). La configuración está fijada en
+El proyecto usa **ruff** (v0.17.2, fijado como dependencia dev: `uv run ruff`
+funciona directo desde el entorno del proyecto). La configuración está fijada en
 `pyproject.toml` (`[tool.ruff]` / `[tool.ruff.lint]`) para que el lint sea
 reproducible: `E4/E7/E9/F` (defaults de ruff) más `W605`, `I`, `UP` y `RUF`.
 Quedan excluidos el export generado `LCP_MCP_Geometric.py` (nbconvert) y los
@@ -65,9 +66,9 @@ uv run ruff format --check lcp/pathfinder.py
 Antes de proponer un cambio, ejecuta `ruff check` y `ruff format --check` sobre
 los archivos modificados. No introduzcas errores de lint nuevos.
 
-> **Nota**: Si `uv run ruff check` falla con `program not found`, usa
-> `uv tool run ruff check ...` o instala ruff globalmente:
-> `uv tool install ruff`
+> **Nota**: ruff es dependencia dev del proyecto. Si `uv run ruff` falla con
+> `program not found`, sincronizá el entorno (`uv sync`) o usa el fallback
+> `uv tool run ruff check ...`.
 
 ---
 
@@ -141,6 +142,12 @@ solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
 `puntos_rutas_<SPACING_M>m.gpkg` correspondiente). El export
 `LCP_MCP_Geometric.py` se regenera desde el notebook con
 `uv run jupyter nbconvert --to script LCP_MCP_Geometric.ipynb`; no lo edites a mano.
+
+**Outputs no commiteados**: `nbstripout` (dependencia dev) está instalado como
+filtro **local** de git (`nbstripout --install` → filtro `filter.nbstripout` +
+`.git/info/attributes`; solo config local, sin CI) — `git add` limpia los outputs
+del notebook automáticamente. La evidencia de cada corrida vive en los
+`_exec_*.ipynb` (ignorados por `.gitignore`) o en la salida de `run_notebook.py`.
 
 ---
 
@@ -300,6 +307,11 @@ output/session_<timestamp>_Refactored/
 
 `phase1_tracebacks/` se elimina automáticamente al finalizar si `KEEP_PHASE1_FILES = False`
 (parámetro en Celda 3 del notebook).
+
+**Limpieza de sesiones**: la carpeta `output/` acumula sesiones locales
+(ignorada por git). No hay limpieza automática: cuando ya no necesites
+sesiones viejas, borralas a mano (explorador o `Remove-Item -Recurse
+output/session_<timestamp>`) — una sesión puede ocupar decenas de MB.
 
 ---
 

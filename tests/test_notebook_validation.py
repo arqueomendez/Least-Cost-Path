@@ -1,0 +1,127 @@
+"""S4: validacion de la Celda 4 con fixtures negativas via mini-notebook."""
+
+import notebook_harness as nh
+
+
+def test_cells_1_to_4_pass_on_sample_data(tmp_path):
+    # camino positivo con los datos reales del repo (solo OUTPUT_DIR a tmp
+    # para no acumular sesiones en output/)
+    srcs = nh.load_code_sources()
+    srcs[2] = nh.patch_cell3(
+        srcs[2],
+        {
+            "OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')": (
+                f"OUTPUT_DIR = os.path.join({str(tmp_path)!r}, f'session_{{timestamp}}')"
+            )
+        },
+    )
+    out, err = nh.run_code(srcs[:4])
+    assert err is None, err
+    assert "Todos los datos son coherentes" in out
+
+
+def test_cell4_rejects_mismatched_crs(tmp_path):
+    pts = tmp_path / "pts_4326.shp"
+    nh.write_points(pts, [(1, -58.4, -34.6), (2, -58.5, -34.7)], crs="EPSG:4326")
+    srcs = nh.build_cells_1_to_4(tmp_path, points=pts, mask=None)
+    _, err = nh.run_code(srcs)
+    assert err is not None, "la validacion debia fallar por CRS desalineado"
+    assert (
+        "El CRS de los PUNTOS no coincide con el del RASTER".replace("RASTER", "RÁSTER")
+        in err
+    )
+
+
+def test_cell4_lists_points_on_invalid_pixels(tmp_path):
+    # raster sintetico: columnas >= 50 son nodata; punto 2 cae ahi dentro de
+    # la extension -> debe listarse su ID y detener la ejecucion.
+    raster = tmp_path / "cost.tif"
+    nh.write_synthetic_raster(raster)
+    pts = tmp_path / "pts_mixed.shp"
+    nh.write_points(pts, [(1, 10.5, 89.5), (2, 60.5, 89.5)], crs="EPSG:32719")
+    srcs = nh.build_cells_1_to_4(tmp_path, raster=raster, points=pts, mask=None)
+    _, err = nh.run_code(srcs)
+    assert err is not None, "el punto sobre pixel nodata debia detener la ejecucion"
+    assert "puntos sobre píxeles INVÁLIDOS" in err
+    assert "IDs de muestra: 2" in err
+
+
+def test_cell6_writes_unreachable_layer(tmp_path):
+    # S8 (corrida con barrera): raster con una columna nodata que desconecta
+    # dos regiones validas; 4 puntos (2 por lado) -> solo 2 rutas alcanzables
+    # de 6 esperadas y la capa 'destinos_inalcanzables' con los 4 pares cruzados.
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_barriera.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+    srcs = nh.build_cells_1_to_4(tmp_path, raster=raster, points=pts, mask=None)
+    cell6 = nh.load_code_sources()[5]  # sin Celda 5 (plot): no aporta al calculo
+    out, err = nh.run_code([*srcs, cell6], timeout=600)
+    assert err is None, err
+
+    gpkg = next(tmp_path.glob("session_*/red_completa_unificada.gpkg"))
+    layers = fiona.listlayers(gpkg)
+    assert "rutas_unificadas" in layers
+    assert "destinos_inalcanzables" in layers
+
+    with fiona.open(gpkg, layer="rutas_unificadas") as src:
+        assert len(src) == 2  # (1,2) y (3,4): solo dentro de cada region
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        rows = {(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src}
+    assert rows == {(1, 3), (1, 4), (2, 3), (2, 4)}
+
+    # ademas: el aviso de reales != esperadas (2 de 6) y el de inalcanzables
+    assert "!= esperadas" in out
+    assert "inalcanzables" in out
+
+
+def test_cell6_resume_reuses_phase1(tmp_path):
+    # S9 (corrida funcional): dos corridas sobre la MISMA sesion; la segunda
+    # debe reutilizar los 3 tracebacks de Fase 1 (huella coincide, pendientes 0)
+    # y producir exactamente los mismos resultados.
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_barriera.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+
+    def sources():
+        srcs = nh.build_cells_1_to_4(
+            tmp_path,
+            raster=raster,
+            points=pts,
+            mask=None,
+            fixed_output_name="session_resume",
+            keep_phase1=True,
+        )
+        return [*srcs, nh.load_code_sources()[5]]
+
+    # corrida 1: todo fresco, sin reutilizacion
+    out1, err1 = nh.run_code(sources(), timeout=600)
+    assert err1 is None, err1
+    assert "RESUME: reutilizando" not in out1
+
+    # corrida 2: huella coincide -> 3 tracebacks reutilizados, 0 pendientes
+    out2, err2 = nh.run_code(sources(), timeout=600)
+    assert err2 is None, err2
+    assert "RESUME: reutilizando 3 tracebacks" in out2
+    assert "pendientes: 0" in out2
+
+    # resultados identicos a los de la corrida fresca
+    gpkg = tmp_path / "session_resume" / "red_completa_unificada.gpkg"
+    with fiona.open(gpkg, layer="rutas_unificadas") as src:
+        assert len(src) == 2
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        rows = {(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src}
+    assert rows == {(1, 3), (1, 4), (2, 3), (2, 4)}

@@ -7,6 +7,7 @@ from shapely.geometry import Point, mapping
 import lcp.data_loader as dl
 
 SAMPLE_POINTS = Path(__file__).resolve().parents[1] / "data" / "points.shp"
+MASK = Path(__file__).resolve().parents[1] / "data" / "area-mask.shp"
 
 
 def test_load_points_from_sample_shapefile():
@@ -47,6 +48,30 @@ def test_duplicate_ids_message_deduped(tmp_path):
     with pytest.raises(ValueError) as exc:
         dl.load_points_as_dict(str(path), "id")
     assert "[1]" in str(exc.value)
+
+
+def test_load_raster_missing_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        dl.load_raster(str(tmp_path / "no_existe.tif"))
+
+
+def test_load_mask_geometry_paths():
+    # None / inexistente -> None (sin mascara)
+    assert dl.load_mask_geometry(None) is None
+    assert dl.load_mask_geometry("no_existe.shp") is None
+    # archivo de mascara real del repo -> geometria no nula
+    geom = dl.load_mask_geometry(str(MASK))
+    assert geom is not None and not geom.is_empty
+
+
+def test_load_mask_geometry_empty_file(tmp_path):
+    path = tmp_path / "vacio.shp"
+    schema = {"geometry": "Polygon", "properties": {}}
+    with fiona.open(
+        path, "w", driver="ESRI Shapefile", schema=schema, crs="EPSG:32719"
+    ):
+        pass
+    assert dl.load_mask_geometry(str(path)) is None
 
 
 def test_unique_ids_still_load(tmp_path):
