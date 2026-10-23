@@ -289,6 +289,11 @@ try:
         all_points_for_validation, _ = dl.load_points_as_dict(
             ALL_POINTS_SHAPEFILE, ID_FIELD_NAME
         )
+        if ANALYSIS_MODE == "single_origin" and len(all_points_for_validation) < 2:
+            raise ValueError(
+                "Modo single_origin requiere al menos 2 puntos (N >= 2); "
+                f"se cargaron {len(all_points_for_validation)}."
+            )
         if ANALYSIS_MODE == "single_origin" and ORIGIN_ID not in all_points_for_validation:
             raise ValueError(
                 f"ORIGIN_ID {ORIGIN_ID!r} no existe. "

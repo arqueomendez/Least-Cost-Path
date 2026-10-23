@@ -28,8 +28,10 @@ Runner de checks (tras CADA tarea): `uv run pytest tests/ -q` + `uv run ruff che
 - T2 — S5,S6 — done — tests de loaders/mascara/n_jobs: **45 passed** tras ruff fix+format (caracterización: sin RED por política).
 - **L4** (T3): refactor KDE **byte-idéntico** al baseline (sha256 del heatmap idéntico pre/post `fac1a7fd…`); descubrimiento empírico: la masa discreta del KDE es `1/ps²` (normalización por área = densidad), no 1 — expectativa del test corregida contra la evidencia.
 - T3 — S3 — done — 17aac83 — Refactor Celda 9 → `_compute_heatmap` (math movido verbatim; orden de prints de consola ligeramente distinto, cosmetic). **Paridad probada**: sha256 del array del GeoTIFF post-refactor == baseline pre-refactor (`fac1a7fd…`). Tests: pico en la celda del punto (4 kernels + argmax estricto quartic), pixel_size desde bounds (≠ res), ejes fila/columna en grilla asimétrica, masa discreta = 1/ps² (densidad — expectativa corregida contra evidencia empírica, no el código), kernel desconocido → ValueError. 12 tests KDE; batería **57 passed**, ruff/format verdes.
-- T4 — S4 — pending — inline — Harness mini-notebook celdas 1–4 con fixtures negativas (CRS, punto fuera)
-- T5 — S7 — pending — inline — Validación N≥2 en single_origin + pin
+- **L5** (T4): harness de mini-notebook en verde — los 3 escenarios de validación pasaron con mensajes exactos; commit `a9f3fdc`.
+- **L6** (T5): RED→GREEN del pin S7; edge N=1 cerrado con validación temprana en la Celda 4.
+- T4 — S4 — done — a9f3fdc — Harness `tests/notebook_harness.py` (subconjuntos de celdas con nbclient + Celda 3 parchada a fixtures en tmp) y `tests/test_notebook_validation.py`: positivo con datos reales, CRS 4326 vs 32719 → CellExecutionError con mensaje exacto, punto sobre nodata (raster sintético) → detiene listando `IDs de muestra: 2`. **3 passed en 14 s**, batería **60 passed**, ruff/format verdes.
+- T5 — S7 — done — Validación `N ≥ 2` en single_origin (Celda 4, insertada antes de la comprobación de ORIGIN_ID) + pin `test_s7_single_origin_requires_two_points`. **RED observado (1 failed) → GREEN 61 passed**, ruff/format verdes, export regenerado. Cierra el edge N=1 de la evaluación.
 - T6 — S8 — pending — inline — Capa GPKG destinos_inalcanzables + pin + corrida
 - T7 — S9 — pending — inline — Reanudación con fingerprint (RESUME) + pin + corrida simulada — el más pesado
 - T8 — S10 — pending — inline — Markdown en español para celdas 1–2 y 4–9
