@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# ## Celda 1 — Importaciones y módulos
+# 
+# Carga las librerías del proyecto (rasterio, fiona, geopandas, joblib, matplotlib, psutil) y los módulos del paquete `lcp/` (`data_loader`, `processing`, `pathfinder`, `utils`, `postprocessing`). Si falla esta celda, el entorno no está sincronizado: ejecutá `uv sync`.
+
 # In[1]:
 
 
@@ -35,6 +39,11 @@ import lcp.postprocessing as postp
 
 print("Módulos cargados exitosamente.")
 
+
+# ## Celda 2 — Funciones de soporte
+# 
+# - `_calculate_n_jobs_for_phase`: estima cuántos workers caben según la RAM disponible (Fase 1 ≈ `raster × 5.5` por worker; Fase 2 ≈ 80 MB; tope de 61 procesos en Windows).
+# - `warm_up_numba`: pre-compila la reconstrucción JIT antes del bucle principal y verifica que los offsets de `MCP_Geometric` sigan siendo los esperados.
 
 # In[2]:
 
@@ -182,6 +191,10 @@ except OSError as e:
 
 print("Parámetros de configuración cargados. Los resultados se guardarán en:", OUTPUT_DIR)
 
+
+# ## Celda 4 — Verificación de coherencia de los datos
+# 
+# Comprueba, en orden: CRS idénticos (ráster / puntos / máscara), solape espacial de extensiones, y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o nodata). En modo `single_origin` además valida el modo, que haya ≥ 2 puntos y que `ORIGIN_ID` exista (lista los IDs disponibles). Cualquier problema **detiene la ejecución** con un mensaje concreto; nada se calcula con datos incoherentes.
 
 # In[4]:
 
@@ -337,6 +350,10 @@ except Exception as e:
     raise
 
 
+# ## Celda 5 — Visualización diagnóstica
+# 
+# Mapa del ráster de coste en escala **lineal y logarítmica** con los puntos superpuestos, guardado como `visualizacion_diagnostica.png`. Usalo para verificar la configuración antes de lanzar el análisis; en modo `single_origin` el origen aparece resaltado con una estrella.
+
 # In[5]:
 
 
@@ -418,6 +435,12 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
+
+# ## Celda 6 — Ejecución en dos fases
+# 
+# - **Fase 1**: un `MCP_Geometric` por origen (solo el origen elegido en modo estrella) que guarda traceback **y escalares** en `phase1_tracebacks/`. Con `RESUME = True`, si la huella (puntos + ráster + modo) coincide se reutilizan los `.npz` existentes y solo se computan los pendientes.
+# - **Fase 2**: reconstrucción Numba de cada ruta y escritura de `red_completa_unificada.gpkg` (más la capa `destinos_inalcanzables` si los hay).
+# - Imprime `MODO:` con las rutas esperadas y compara al final esperadas vs reales (diferencia = destinos con coste infinito). Si un worker falla, la ejecución **se detiene** antes de escribir el GPKG.
 
 # In[6]:
 
@@ -715,6 +738,10 @@ finally:
         print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR} ({motivo})")
 
 
+# ## Celda 7 — Mapa final de la red
+# 
+# Carga la red desde memoria (o el GeoPackage), armoniza CRS con el ráster, recorta la ventana con margen y dibuja rutas + nodos sobre el coste en escala logarítmica. Guarda `red_de_rutas_final.png`.
+
 # In[7]:
 
 
@@ -817,6 +844,10 @@ except Exception as e:
     import traceback as tb
     tb.print_exc()
 
+
+# ## Celda 8 — Puntos densificados sobre las rutas
+# 
+# Coloca un punto cada `SPACING_M` metros (25 m por defecto) sobre cada ruta por interpolación vectorizada sobre la longitud acumulada. Guarda `puntos_rutas_<espaciado>m.gpkg` con la columna `route_idx` para trazabilidad. Es la entrada de la Celda 9.
 
 # In[8]:
 
@@ -979,6 +1010,10 @@ print(f"  {output_path}")
 print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1f} s")
 print(f"{'─'*60}")
 
+
+# ## Celda 9 — Mapa de calor (KDE estilo QGIS)
+# 
+# Estimación de densidad sobre los puntos densificados: grilla con margen = bandwidth, binning numpy, kernel QGIS (`HEATMAP_KERNEL`, quartic por defecto) y convolución FFT con recorte "same". La lógica vive en `_compute_heatmap` (con tests de regresión: pico, georreferenciación y masa). Salidas: GeoTIFF + PNG. Parámetros: `HEATMAP_RES_M`, `HEATMAP_BANDWIDTH_M`, `HEATMAP_KERNEL`.
 
 # In[9]:
 

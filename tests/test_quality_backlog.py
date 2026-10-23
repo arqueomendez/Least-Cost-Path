@@ -93,3 +93,26 @@ def test_s9_resume_wiring():
     # kwargs de np.savez_compressed (sin comillas: son argumentos de palabra clave)
     assert "dest_ids=np.array(" in pf_src
     assert "cost_scalars=np.array(" in pf_src
+
+
+def test_s10_markdown_before_every_code_cell():
+    # S10: cada celda de codigo tiene su celda markdown explicativa en espanol
+    # justo antes (incluye la de modos antes de la Celda 3).
+    types = [c.cell_type for c in NB.cells]
+    assert types.count("markdown") == 9
+    assert types.count("code") == 9
+    for i, t in enumerate(types):
+        if t == "code":
+            assert i > 0 and types[i - 1] == "markdown", (
+                f"code en posicion {i} sin markdown previo"
+            )
+    joined = "\n".join(c.source for c in NB.cells if c.cell_type == "markdown")
+    for token in (
+        "Celda 1",
+        "Celda 2",
+        "Celda 4",
+        "Celda 6",
+        "RESUME",
+        "_compute_heatmap",
+    ):
+        assert token in joined, token
