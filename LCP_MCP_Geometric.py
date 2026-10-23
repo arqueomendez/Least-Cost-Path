@@ -938,69 +938,88 @@ if 'OUTPUT_DIR' not in globals() or not os.path.exists(os.path.join(OUTPUT_DIR, 
 points_path = os.path.join(OUTPUT_DIR, _PUNTOS_NAME)
 points_gdf = gpd.read_file(points_path)
 
+def _compute_heatmap(coords, minx, miny, maxx, maxy, res, bandwidth, kernel_name):
+    """Binning + kernel QGIS + convolucion FFT -> (heatmap, pixel_size_x, pixel_size_y).
+
+    Extraido de la Celda 9 sin cambios matematicos para poder testear la
+    regresion KDE/FFT (pico del punto, georreferenciacion y masa del kernel).
+    coords: array (N,2) en coordenadas de mundo; los bounds definen la grilla
+    (el caller agrega el margen = bandwidth).
+    """
+    # --- Grilla: el tamano del pixel se deriva de los bounds (NO de res) ---
+    width = int(np.ceil((maxx - minx) / res))
+    height = int(np.ceil((maxy - miny) / res))
+    pixel_size_x = (maxx - minx) / width
+    pixel_size_y = (maxy - miny) / height
+
+    # --- 2. Numpy binning vectorizado (usa el MISMO pixel_size del raster) ---
+    cols = ((coords[:, 0] - minx) / pixel_size_x).astype(np.int32)
+    rows = ((maxy - coords[:, 1]) / pixel_size_y).astype(np.int32)
+    valid = (cols >= 0) & (cols < width) & (rows >= 0) & (rows < height)
+
+    count_grid = np.zeros((height, width), dtype=np.float64)
+    np.add.at(count_grid, (rows[valid], cols[valid]), 1)
+
+    # --- 3. Kernel de QGIS (usando pixel_size real, no res) ---
+    ps = (pixel_size_x + pixel_size_y) / 2.0
+    radius_px = int(np.ceil(bandwidth / ps))
+    y, x = np.ogrid[-radius_px:radius_px + 1, -radius_px:radius_px + 1]
+    dist_px = np.sqrt(x**2 + y**2)
+    u = (dist_px * ps) / bandwidth
+
+    if kernel_name == "quartic":
+        kernel = np.where(u <= 1, (15.0 / 16.0) * (1 - u**2) ** 2, 0.0)
+    elif kernel_name == "gaussian":
+        kernel = np.exp(-0.5 * u**2)
+    elif kernel_name == "triangular":
+        kernel = np.where(u <= 1, 1 - u, 0.0)
+    elif kernel_name == "uniform":
+        kernel = np.where(u <= 1, 1.0, 0.0)
+    else:
+        raise ValueError(f"Kernel no soportado: {kernel_name}")
+
+    kernel_area = np.sum(kernel) * (ps**2)
+    kernel = kernel / kernel_area
+
+    # --- 4. Convolucion via FFT (scipy.fft) + recorte "same" ---
+    count_padded = np.pad(count_grid, pad_width=radius_px, mode="constant")
+    kernel_padded = np.zeros_like(count_padded)
+    kh, kw = kernel.shape
+    kernel_padded[:kh, :kw] = kernel
+
+    fft_grid = rfft2(count_padded)
+    fft_kernel = rfft2(kernel_padded)
+    fft_result = fft_grid * fft_kernel
+    heatmap = irfft2(fft_result, s=count_padded.shape)
+
+    heatmap = heatmap[
+        2 * radius_px : 2 * radius_px + height, 2 * radius_px : 2 * radius_px + width
+    ]
+    return heatmap, pixel_size_x, pixel_size_y
+
+
 # --- 1. Extensión con margen = bandwidth (evita efectos de borde) ---
 minx, miny, maxx, maxy = points_gdf.total_bounds
 margin = HEATMAP_BANDWIDTH_M
 minx -= margin; miny -= margin; maxx += margin; maxy += margin
 
-width  = int(np.ceil((maxx - minx) / HEATMAP_RES_M))
-height = int(np.ceil((maxy - miny) / HEATMAP_RES_M))
-# from_bounds con paso exacto: truncamos el bounding box a multiplos exactos de HEATMAP_RES_M
-# para que el tamano del pixel en el raster coincida exactamente con el paso del binning
-pixel_size_x = (maxx - minx) / width
-pixel_size_y = (maxy - miny) / height
+# --- 2-4. Grilla + binning + kernel + FFT: extraido a _compute_heatmap ---
+# (mismas formulas; ver el docstring. Los prints de resultado quedan abajo.)
+print("  Rasterizando puntos via numpy binning...")
+print("  Aplicando kernel via FFT...")
+coords = get_coordinates(points_gdf.geometry)
+heatmap, pixel_size_x, pixel_size_y = _compute_heatmap(
+    coords, minx, miny, maxx, maxy,
+    HEATMAP_RES_M, HEATMAP_BANDWIDTH_M, HEATMAP_KERNEL,
+)
+width, height = heatmap.shape[1], heatmap.shape[0]
 transform = from_bounds(minx, miny, maxx, maxy, width, height)
+ps = (pixel_size_x + pixel_size_y) / 2.0
+radius_px = int(np.ceil(HEATMAP_BANDWIDTH_M / ps))
 
 print(f"  Grid: {width} × {height} celdas ({width*height/1e6:.1f} Mpx)")
 print(f"  Pixel real: {pixel_size_x:.4f} × {pixel_size_y:.4f} m")
-
-# --- 2. Numpy binning vectorizado (reemplaza rasterio.rasterize) ---
-# Usar el mismo pixel_size que from_bounds para que grid de datos y raster coincidan
-print("  Rasterizando puntos via numpy binning...")
-coords = get_coordinates(points_gdf.geometry)
-cols = ((coords[:, 0] - minx) / pixel_size_x).astype(np.int32)
-rows = ((maxy - coords[:, 1]) / pixel_size_y).astype(np.int32)
-valid = (cols >= 0) & (cols < width) & (rows >= 0) & (rows < height)
-
-count_grid = np.zeros((height, width), dtype=np.float64)
-np.add.at(count_grid, (rows[valid], cols[valid]), 1)
-
-# --- 3. Construir kernel de QGIS (usando pixel_size real) ---
-ps = (pixel_size_x + pixel_size_y) / 2.0
-radius_px = int(np.ceil(HEATMAP_BANDWIDTH_M / ps))
-y, x = np.ogrid[-radius_px:radius_px+1, -radius_px:radius_px+1]
-dist_px = np.sqrt(x**2 + y**2)
-u = (dist_px * ps) / HEATMAP_BANDWIDTH_M
-
-if HEATMAP_KERNEL == "quartic":
-    kernel = np.where(u <= 1, (15.0 / 16.0) * (1 - u**2)**2, 0.0)
-elif HEATMAP_KERNEL == "gaussian":
-    kernel = np.exp(-0.5 * u**2)
-elif HEATMAP_KERNEL == "triangular":
-    kernel = np.where(u <= 1, 1 - u, 0.0)
-elif HEATMAP_KERNEL == "uniform":
-    kernel = np.where(u <= 1, 1.0, 0.0)
-else:
-    raise ValueError(f"Kernel no soportado: {HEATMAP_KERNEL}")
-
-kernel_area = np.sum(kernel) * (ps ** 2)
-kernel = kernel / kernel_area
-
-print(f"  Kernel size: {kernel.shape[0]} × {kernel.shape[1]} px")
-
-# --- 4. Convolución via FFT (scipy.fft con MKL backend) ---
-print("  Aplicando kernel via FFT...")
-count_padded = np.pad(count_grid, pad_width=radius_px, mode='constant')
-kernel_padded = np.zeros_like(count_padded)
-kh, kw = kernel.shape
-kernel_padded[:kh, :kw] = kernel
-
-fft_grid = rfft2(count_padded)
-fft_kernel = rfft2(kernel_padded)
-fft_result = fft_grid * fft_kernel
-heatmap = irfft2(fft_result, s=count_padded.shape)
-
-heatmap = heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]
+print(f"  Kernel size: {2*radius_px+1} × {2*radius_px+1} px")
 
 # --- 5. Guardar GeoTIFF ---
 heatmap_tif = os.path.join(OUTPUT_DIR, f'heatmap_{HEATMAP_RES_M}m_{int(HEATMAP_BANDWIDTH_M/1000)}km_{HEATMAP_KERNEL}.tif')
