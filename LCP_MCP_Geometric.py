@@ -535,17 +535,19 @@ try:
             "Revisa los mensajes 'ERROR Fase 1' de arriba; no se escribira ningun GPKG."
         )
 
-    # Destinos inalcanzables (coste infinito): se informan, no bloquean.
+    # Destinos inalcanzables (coste infinito): se informan, no bloquean, y en
+    # el Paso 5 se materializan en una capa aditiva del GPKG (S8).
     pares_inf = [
-        f"{oid}->{did}"
+        (oid, did)
         for oid, cdict in cost_scalars_index.items()
         for did, cval in cdict.items()
         if not np.isfinite(cval)
     ]
     if pares_inf:
+        muestra = ", ".join(f"{oid}->{did}" for oid, did in pares_inf[:10])
         print(
             f"  ADVERTENCIA: {len(pares_inf)} par(es) origen-destino con coste "
-            f"infinito (inalcanzables). Muestra: {', '.join(pares_inf[:10])}"
+            f"infinito (inalcanzables). Muestra: {muestra}"
             f"{'...' if len(pares_inf) > 10 else ''}."
         )
 
@@ -587,6 +589,31 @@ try:
         routes_gdf = gpd.GeoDataFrame(all_route_records, crs=raster_crs)
         routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
         print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
+
+    # --- S8: destinos sin ruta materializados en capa aditiva ---
+    # No toca el esquema de 'rutas_unificadas'; mode='a' conserva la capa principal.
+    if pares_inf:
+        inf_gdf = gpd.GeoDataFrame(
+            {
+                "origin_id": [int(o) for o, _ in pares_inf],
+                "dest_id": [int(d) for _, d in pares_inf],
+                "cost_total": [float("inf")] * len(pares_inf),
+            },
+            geometry=gpd.points_from_xy(
+                [all_points[d][0] for _, d in pares_inf],
+                [all_points[d][1] for _, d in pares_inf],
+            ),
+            crs=raster_crs,
+        )
+        inf_gdf.to_file(
+            gpkg_output_path,
+            layer="destinos_inalcanzables",
+            driver="GPKG",
+            mode="a" if os.path.exists(gpkg_output_path) else "w",
+        )
+        print(
+            f"  {len(pares_inf)} destinos inalcanzables escritos en capa 'destinos_inalcanzables'."
+        )
 
     print(f"  Rutas escritas: {len(all_route_records)} | esperadas: {n_expected}")
     if len(all_route_records) != n_expected:

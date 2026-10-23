@@ -69,3 +69,12 @@ def test_s7_single_origin_requires_two_points():
     # Celda 4, no generar un task degenerado en la Fase 1.
     s = SRC[3]
     assert "al menos 2 puntos" in s
+
+
+def test_s8_unreachable_layer_written():
+    # S8: la Celda 6 materializa los destinos con coste infinito en una segunda
+    # capa aditiva, sin pisar el GPKG principal.
+    s = SRC[5]
+    assert 'layer="destinos_inalcanzables"' in s
+    assert "pares_inf" in s
+    assert 'mode="a" if os.path.exists' in s

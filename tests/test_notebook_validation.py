@@ -44,3 +44,38 @@ def test_cell4_lists_points_on_invalid_pixels(tmp_path):
     assert err is not None, "el punto sobre pixel nodata debia detener la ejecucion"
     assert "puntos sobre píxeles INVÁLIDOS" in err
     assert "IDs de muestra: 2" in err
+
+
+def test_cell6_writes_unreachable_layer(tmp_path):
+    # S8 (corrida con barrera): raster con una columna nodata que desconecta
+    # dos regiones validas; 4 puntos (2 por lado) -> solo 2 rutas alcanzables
+    # de 6 esperadas y la capa 'destinos_inalcanzables' con los 4 pares cruzados.
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_barriera.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+    srcs = nh.build_cells_1_to_4(tmp_path, raster=raster, points=pts, mask=None)
+    cell6 = nh.load_code_sources()[5]  # sin Celda 5 (plot): no aporta al calculo
+    out, err = nh.run_code([*srcs, cell6], timeout=600)
+    assert err is None, err
+
+    gpkg = next(tmp_path.glob("session_*/red_completa_unificada.gpkg"))
+    layers = fiona.listlayers(gpkg)
+    assert "rutas_unificadas" in layers
+    assert "destinos_inalcanzables" in layers
+
+    with fiona.open(gpkg, layer="rutas_unificadas") as src:
+        assert len(src) == 2  # (1,2) y (3,4): solo dentro de cada region
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        rows = {(f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src}
+    assert rows == {(1, 3), (1, 4), (2, 3), (2, 4)}
+
+    # ademas: el aviso de reales != esperadas (2 de 6) y el de inalcanzables
+    assert "!= esperadas" in out
+    assert "inalcanzables" in out

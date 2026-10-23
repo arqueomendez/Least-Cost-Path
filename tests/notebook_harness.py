@@ -85,6 +85,26 @@ def write_synthetic_raster(path, nodata_cols_from=50):
         dst.write(data, 1)
 
 
+def write_barrier_raster(path, barrier_col=50):
+    """Raster 100x100, EPSG:32719, 1 m: solo la columna barrier_col es nodata
+    (-9999), partiendo la grilla en dos regiones validas desconectadas."""
+    data = np.ones((100, 100), dtype=np.float32)
+    data[:, barrier_col] = -9999.0
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=100,
+        width=100,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32719",
+        transform=from_origin(0, 100, 1, 1),
+        nodata=-9999.0,
+    ) as dst:
+        dst.write(data, 1)
+
+
 def write_points(path, points, crs):
     """points: lista de (id, x, y)."""
     schema = {"geometry": "Point", "properties": {"id": "int"}}
