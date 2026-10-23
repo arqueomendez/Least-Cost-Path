@@ -21,7 +21,7 @@ Runner: `uv run pytest tests/` · Verificación funcional: `uv run jupyter nbcon
 - T2 — S1,S2,S3,S4,S5 — done — d59dc50 — RED observado (5 pins fallaban) → parche celdas 3/4/6 + resaltado 5/7 + tag `parameters` en Celda 3 (requisito de S6: sin él papermill inyectaría al inicio y la Celda 3 pisaría los overrides; pin añadido con RED→GREEN) → GREEN 30 passed.
 - T3 — S1 — done — d59dc50 — Export regenerado: 29 menciones de `ANALYSIS_MODE|single_origin|ORIGIN_ID`, 0 de "Proyecto Vannia", drift de contenido vs notebook = 0.
 - T4 — S7 — pending — inline — Docs README/AGENTS
-- T5 — S8 — pending — inline — Corridas funcionales (estrella + regresión) y cierre pytest/ruff
+- T5 — S8 — done — c4d889c..12e6481 — Corrida estrella vía papermill (exit 0, 10/10 celdas): echo `MODO: single_origin (origen 7) | rutas esperadas: 13`, `Rutas escritas: 13 | esperadas: 13`, GPKG con exactamente 13 filas todas `origin_id=7` y destinos 1..14 sin 7, cero pares no-nulos, 0 outputs de error. Regresión all_pairs vía nbconvert (exit 0): `MODO: all_pairs (N x N) | rutas esperadas: 91`, `Rutas escritas: 91 | esperadas: 91`, 13/13 tracebacks, pares origin<dest íntegros, 0 errores. Batería final: pytest **30 passed**, `ruff check .` limpio, `format --check .` 19 archivos. Commits de pruebas/gitignore `12e6481`.
 
 ## Log
 
@@ -30,3 +30,4 @@ Runner: `uv run pytest tests/` · Verificación funcional: `uv run jupyter nbcon
 - **L3** (decisión del usuario, verbatim): "Celda + papermill (recomendado)" — modalidad de ejecución CLI.
 - **L4** (evidencia de investigación en línea): convención SSSP vs APSP en herramientas de grafos (NetworkX expone `source=` como parámetro, no herramienta distinta); celda etiquetada `parameters` + `papermill -p` es el estándar industry (papermill docs, SageMaker, Airflow, Kestra — nbconvert no admite inyectar parámetros: issues jupyter/nbconvert#681, #1281); enum validado + sentinel `None` (PEP 661, Kestra ENUM inputs, Fowler feature toggles).
 - **L5** (T2+T3): commit `d59dc50`. RED 5 failed → GREEN 30 passed; tag `parameters` descubierto como requisito implícito de S6 y añadido con su pin.
+- **L6** (compuerta RDD, solo lectura): ASSESS sobre `feature/notebook-hardening..HEAD` → **risk `high`, `reviewDue: true`** (señal `process_boundary/shell_process` en `LCP_MCP_Geometric.py`, 10 paths, 1605 líneas) con plan `writerSelfVerification + independentVerifier`. **No se inicia lineage nuevo** (directiva L16 del feature anterior: la herramienta de revisión no tiene solución en esta sesión); el verificador independiente exigido por el plan se lanzó como subagente (`gentle-ai-verify`, task `mvkcs4jk-1-8b3j`) — integración pendiente.
