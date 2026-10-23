@@ -2,8 +2,8 @@
 
 import os
 
-import rasterio
 import fiona
+import rasterio
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
@@ -13,7 +13,9 @@ from shapely.ops import unary_union
 # elimina en fiona 2.0). Funcionan tanto con objetos Feature como con dicts.
 # ---------------------------------------------------------------------------
 def _get_properties(feature):
-    return feature.properties if hasattr(feature, "properties") else feature["properties"]
+    return (
+        feature.properties if hasattr(feature, "properties") else feature["properties"]
+    )
 
 
 def _get_id(feature):
@@ -41,6 +43,7 @@ def load_points_as_dict(shapefile_path, id_field):
     Compatible con fiona 1.9+ (acceso por atributo en lugar de dict-style).
     """
     points = {}
+    duplicated = []
     crs = None
     print(f"Cargando puntos desde: {os.path.basename(shapefile_path)}")
     if not os.path.exists(shapefile_path):
@@ -60,10 +63,10 @@ def load_points_as_dict(shapefile_path, id_field):
             return {}, crs
 
         first_props = _get_properties(features[0])
-        use_feature_id = (
-            id_field not in first_props
-            and id_field.lower() in ["fid", "id"]
-        )
+        use_feature_id = id_field not in first_props and id_field.lower() in [
+            "fid",
+            "id",
+        ]
         if use_feature_id:
             print(
                 f"  ADVERTENCIA: Campo '{id_field}' no encontrado en propiedades. "
@@ -76,9 +79,7 @@ def load_points_as_dict(shapefile_path, id_field):
             props = _get_properties(feature)
             try:
                 point_id = (
-                    int(_get_id(feature))
-                    if use_feature_id
-                    else int(props[id_field])
+                    int(_get_id(feature)) if use_feature_id else int(props[id_field])
                 )
             except KeyError:
                 raise KeyError(
@@ -88,7 +89,15 @@ def load_points_as_dict(shapefile_path, id_field):
 
             # shape() normaliza Geometry de fiona 1.9 o dict-geojson antiguo.
             geom = shape(_get_geometry(feature))
+            if point_id in points and point_id not in duplicated:
+                duplicated.append(point_id)
             points[point_id] = (geom.x, geom.y)
+
+        if duplicated:
+            raise ValueError(
+                f"IDs duplicados en '{os.path.basename(shapefile_path)}': "
+                f"{sorted(duplicated)}. Cada punto debe tener un ID unico."
+            )
 
     print(f"Se cargaron {len(points)} puntos.")
     return points, crs

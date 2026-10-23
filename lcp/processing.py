@@ -1,11 +1,11 @@
 # lcp/processing.py
 
-import numpy as np
 import fiona
+import numpy as np
 import rasterio
+from pyproj import CRS
 from rasterio.features import rasterize
 from shapely.geometry import shape
-from pyproj import CRS
 
 
 def _get_geometry(feature):

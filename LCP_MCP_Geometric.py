@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[3]:
+# In[1]:
 
 
 # ==============================================================================
@@ -36,7 +36,7 @@ import lcp.postprocessing as postp
 print("Módulos cargados exitosamente.")
 
 
-# In[ ]:
+# In[2]:
 
 
 # ==============================================================================
@@ -105,7 +105,7 @@ def warm_up_numba():
     print("Warm-up completado.")
 
 
-# In[ ]:
+# In[5]:
 
 
 # ==============================================================================
@@ -113,14 +113,14 @@ def warm_up_numba():
 # ==============================================================================
 # --- 1. Parámetros de Rutas ---
 BASE_DIR = os.getcwd()
-DATA_DIR = R"C:\Users\LAV\Desktop\Proyecto Vannia\Proceso\coste"   # ruta directa
+DATA_DIR = os.path.join(BASE_DIR, "data")
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')
 
-COST_RASTER_PATH = os.path.join(DATA_DIR, 'Coste.tif')
-ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'puntos del perimetro del poligono.gpkg')
-MASK_SHAPEFILE_PATH = R"C:\Users\LAV\Desktop\Proyecto Vannia\QGIS\Poligono ampliado AE.gpkg"
-ID_FIELD_NAME = 'fid'
+COST_RASTER_PATH = os.path.join(DATA_DIR, 'cost.tif')
+ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'points.shp')
+MASK_SHAPEFILE_PATH = os.path.join(DATA_DIR, 'area-mask.shp')
+ID_FIELD_NAME = 'id'
 
 # --- 2. Opciones de Almacenamiento ---
 KEEP_PHASE1_FILES = False
@@ -136,7 +136,7 @@ except OSError as e:
 print("Parámetros de configuración cargados. Los resultados se guardarán en:", OUTPUT_DIR)
 
 
-# In[ ]:
+# In[6]:
 
 
 # ==============================================================================
@@ -271,7 +271,7 @@ except Exception as e:
     raise
 
 
-# In[5]:
+# In[7]:
 
 
 # ==============================================================================
@@ -339,7 +339,7 @@ except Exception as e:
     traceback.print_exc()
 
 
-# In[ ]:
+# In[8]:
 
 
 # ==============================================================================
@@ -357,6 +357,7 @@ routes_gdf = None
 dur_p1 = dur_p2 = 0.0
 tasks_p1, tasks_p2 = [], []
 n_jobs_p1 = n_jobs_p2 = 0
+pipeline_ok = False  # True solo si las 5 fases terminan; controla la limpieza en finally.
 
 try:
     # --- PASO 1: Preparar datos ---
@@ -424,8 +425,32 @@ try:
     print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
     cost_scalars_index = {oid: cdict for oid, cdict in results_p1}
-    n_computed = sum(1 for cdict in cost_scalars_index.values() if cdict)
+    failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
+    n_computed = len(cost_scalars_index) - len(failed_origins)
     print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
+
+    # Fallo duro: si algun worker fallo, la red resultante quedaria incompleta
+    # y escribir un GPKG parcial seria enganoso. Detenemos antes de la Fase 2.
+    if failed_origins:
+        raise RuntimeError(
+            f"FASE 1 INCOMPLETA: {len(failed_origins)} origen(es) fallaron. "
+            f"IDs: {failed_origins[:20]}{'...' if len(failed_origins) > 20 else ''}. "
+            "Revisa los mensajes 'ERROR Fase 1' de arriba; no se escribira ningun GPKG."
+        )
+
+    # Destinos inalcanzables (coste infinito): se informan, no bloquean.
+    pares_inf = [
+        f"{oid}->{did}"
+        for oid, cdict in cost_scalars_index.items()
+        for did, cval in cdict.items()
+        if not np.isfinite(cval)
+    ]
+    if pares_inf:
+        print(
+            f"  ADVERTENCIA: {len(pares_inf)} par(es) origen-destino con coste "
+            f"infinito (inalcanzables). Muestra: {', '.join(pares_inf[:10])}"
+            f"{'...' if len(pares_inf) > 10 else ''}."
+        )
 
     # --- PASO 4: FASE 2 ---
     n_jobs_p2 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=2)
@@ -466,6 +491,7 @@ try:
         routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
         print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
 
+    pipeline_ok = True
     total_duration = dur_p1 + dur_p2
     print("\n" + "="*60)
     print("--- RESUMEN DE EJECUCIÓN (DOS FASES) ---")
@@ -479,6 +505,7 @@ except Exception as e:
     print(f"\nERROR CRÍTICO en Celda 6: {e}")
     import traceback as tb
     tb.print_exc()
+    raise
 
 finally:
     # Limpieza garantizada de archivos temporales, incluso ante excepción.
@@ -489,14 +516,19 @@ finally:
         except OSError as ce:
             print(f"  No se pudo eliminar el memmap: {ce}")
 
-    if not KEEP_PHASE1_FILES and os.path.isdir(PHASE1_DIR):
+    if not KEEP_PHASE1_FILES and pipeline_ok and os.path.isdir(PHASE1_DIR):
         shutil.rmtree(PHASE1_DIR, ignore_errors=True)
         print("  Tracebacks de Fase 1 eliminados (KEEP_PHASE1_FILES=False).")
-    elif KEEP_PHASE1_FILES:
-        print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR}")
+    elif os.path.isdir(PHASE1_DIR):
+        motivo = (
+            "KEEP_PHASE1_FILES=True"
+            if KEEP_PHASE1_FILES
+            else "ejecucion con error (evidencia conservada)"
+        )
+        print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR} ({motivo})")
 
 
-# In[ ]:
+# In[9]:
 
 
 # ==============================================================================
@@ -505,7 +537,7 @@ finally:
 print("\nIniciando la visualización final de la red de rutas...")
 
 try:
-    if 'routes_gdf' not in dir() or routes_gdf is None or len(routes_gdf) == 0:
+    if 'routes_gdf' not in globals() or routes_gdf is None or len(routes_gdf) == 0:
         print("routes_gdf no disponible en memoria; cargando desde el GeoPackage...")
         routes_gdf = gpd.read_file(
             os.path.join(OUTPUT_DIR, 'red_completa_unificada.gpkg'),
@@ -587,7 +619,7 @@ except Exception as e:
     tb.print_exc()
 
 
-# In[ ]:
+# In[10]:
 
 
 # ==============================================================================
@@ -625,9 +657,9 @@ def _find_latest_gpkg(root):
         if os.path.exists(gpkg): return gpkg, d
     return None, None
 
-if 'routes_gdf' in dir() and routes_gdf is not None and len(routes_gdf) > 0:
+if 'routes_gdf' in globals() and routes_gdf is not None and len(routes_gdf) > 0:
     pass
-elif 'OUTPUT_DIR' in dir() and os.path.exists(p := os.path.join(OUTPUT_DIR, 'red_completa_unificada.gpkg')):
+elif 'OUTPUT_DIR' in globals() and os.path.exists(p := os.path.join(OUTPUT_DIR, 'red_completa_unificada.gpkg')):
     routes_gdf = gpd.read_file(p, layer='rutas_unificadas')
 else:
     gpkg, sess_dir = _find_latest_gpkg(os.getcwd())
@@ -668,8 +700,12 @@ def densify_chunk(indices, coords_list, lengths, n_pts_arr, spacing):
         n = int(n)
         # --- Guarda de ruta degenerada: longitud 0 o un solo vértice ---
         if length <= 0 or len(coords) < 2:
-            x0 = coords[0, 0] if len(coords) else 0.0
-            y0 = coords[0, 1] if len(coords) else 0.0
+            # Ruta degenerada: sin geometria utilizable no generamos puntos
+            # (antes escribia un punto ficticio en (0, 0) del mundo).
+            if len(coords) == 0:
+                continue
+            x0 = coords[0, 0]
+            y0 = coords[0, 1]
             chunk_x.append(np.full(n, x0))
             chunk_y.append(np.full(n, y0))
             chunk_idx.append(np.full(n, idx, dtype=np.int32))
@@ -693,6 +729,10 @@ def densify_chunk(indices, coords_list, lengths, n_pts_arr, spacing):
         chunk_x.append(coords[i, 0] + t * seg_vecs[i, 0])
         chunk_y.append(coords[i, 1] + t * seg_vecs[i, 1])
         chunk_idx.append(np.full(n, idx, dtype=np.int32))
+    if not chunk_x:
+        # Lote completo de rutas sin geometria utilizable: sin puntos que anadir
+        # (evita ValueError de np.concatenate sobre lista vacia).
+        return (np.empty(0), np.empty(0), np.empty(0, dtype=np.int32))
     return (np.concatenate(chunk_x), np.concatenate(chunk_y),
             np.concatenate(chunk_idx))
 
@@ -716,7 +756,7 @@ n_total = len(xs)
 # ── 7. GPKG DIRECTO CON FIONA ──
 output_path = os.path.join(OUTPUT_DIR, f'puntos_rutas_{int(SPACING_M)}m.gpkg')
 schema = {'geometry': 'Point', 'properties': {'route_idx': 'int'}}
-crs_wkt = str(_crs_rutas)
+crs_wkt = None if _crs_rutas is None else str(_crs_rutas)
 
 BATCH = 200_000
 with fiona.open(output_path, 'w', driver='GPKG', schema=schema, crs=crs_wkt) as dst:
@@ -741,7 +781,7 @@ print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1
 print(f"{'─'*60}")
 
 
-# In[1]:
+# In[12]:
 
 
 # ==============================================================================
@@ -759,7 +799,7 @@ from shapely import get_coordinates
 
 # Parámetros configurables
 HEATMAP_RES_M = 30          # Resolución espacial del raster (m/px)
-HEATMAP_BANDWIDTH_M = 10000 # Radio de búsqueda / bandwidth (metros)
+HEATMAP_BANDWIDTH_M = 1000 # Radio de búsqueda / bandwidth (metros)
 HEATMAP_KERNEL = "quartic"  # Kernel de QGIS: "quartic", "gaussian", "triangular", "uniform"
 
 print(f"\nGenerando mapa de calor (QGIS-style)...")
@@ -767,22 +807,25 @@ print(f"  Resolución: {HEATMAP_RES_M} m/px")
 print(f"  Bandwidth:  {HEATMAP_BANDWIDTH_M / 1000:.1f} km")
 print(f"  Kernel:     {HEATMAP_KERNEL}")
 
-if 'OUTPUT_DIR' not in dir() or not os.path.exists(os.path.join(OUTPUT_DIR, 'puntos_rutas_25m.gpkg')):
+# Resuelve el mismo espaciado que la Celda 8; default para ejecucion suelta de la celda.
+SPACING_M = globals().get('SPACING_M', 25.0)
+_PUNTOS_NAME = f'puntos_rutas_{int(SPACING_M)}m.gpkg'
+if 'OUTPUT_DIR' not in globals() or not os.path.exists(os.path.join(OUTPUT_DIR, _PUNTOS_NAME)):
     def _find_latest(out):
         if not os.path.isdir(out): return None
         sessions = sorted([d for d in os.listdir(out) if d.startswith('session_')],
                          key=lambda s: os.path.getmtime(os.path.join(out, s)), reverse=True)
         for s in sessions:
             d = os.path.join(out, s)
-            if os.path.exists(os.path.join(d, 'red_completa_unificada.gpkg')): return d
+            if os.path.exists(os.path.join(d, _PUNTOS_NAME)): return d
         return None
     sess_dir = _find_latest(os.path.join(os.getcwd(), 'output'))
     if sess_dir is None:
-        raise FileNotFoundError('No se encontro sesion con red_completa_unificada.gpkg')
+        raise FileNotFoundError(f'No se encontro sesion con {_PUNTOS_NAME}')
     OUTPUT_DIR = sess_dir
     print(f'  OUTPUT_DIR auto-detectado: {os.path.basename(OUTPUT_DIR)}')
 
-points_path = os.path.join(OUTPUT_DIR, 'puntos_rutas_25m.gpkg')
+points_path = os.path.join(OUTPUT_DIR, _PUNTOS_NAME)
 points_gdf = gpd.read_file(points_path)
 
 # --- 1. Extensión con margen = bandwidth (evita efectos de borde) ---

@@ -35,9 +35,9 @@ La herramienta calcula el conjunto completo de rutas entre todos los pares de pu
 ### Archivos principales
 
 - **`LCP_MCP_Geometric.ipynb`**: Notebook principal de ejecución paso a paso, visualización y exportación de resultados (9 celdas).
-- **`LCP_MCP_Geometric-retake.ipynb`**: Notebook alternativo para retomar resultados ya calculados y ejecutar solo celdas 8 y 9 (post-procesamiento).
-- **`generar_heatmap.py`**: Script CLI standalone para generar heatmap KDE desde cualquier GPKG de puntos densificados. Acepta `--res`, `--bw`, `--kernel`.
-- **`_diag_global.py`**: Script de diagnóstico para verificar que joblib loky funcione en Windows.
+- **`tests/`**: Suite de pytest (`uv run pytest tests/`): unitarias de `lcp/` + roundtrip Fase 1 → Fase 2.
+- **`run_notebook.py`**: Ejecuta el notebook de forma no interactiva con nbconvert (timeout 30 min/celda).
+- **`LCP_MCP_Geometric.py`**: Export del notebook; se regenera con `uv run jupyter nbconvert --to script LCP_MCP_Geometric.ipynb` (no editar a mano).
 - **`pyproject.toml`**: Configuración y dependencias del proyecto.
 - **`uv.lock`**: Bloqueo de versiones de dependencias.
 - **`requirements.txt`**: Lista de dependencias en formato pip.
@@ -70,8 +70,8 @@ output/session_<timestamp>_Refactored/
 │   └── ...
 ├── red_completa_unificada.gpkg # rutas calculadas, layer='rutas_unificadas'
 ├── puntos_rutas_25m.gpkg       # puntos densificados sobre rutas (Celda 8)
-├── heatmap_30m_10km_quartic.tif # mapa de calor GeoTIFF (Celda 9)
-└── heatmap_30m_10km_quartic.png # mapa de calor PNG (Celda 9)
+├── heatmap_30m_1km_quartic.tif # mapa de calor GeoTIFF (Celda 9)
+└── heatmap_30m_1km_quartic.png # mapa de calor PNG (Celda 9)
 ```
 
 ## Método de trabajo
@@ -117,7 +117,7 @@ Carga el GeoPackage desde memoria (o disco si es necesario) y genera un mapa fin
 Genera puntos cada `SPACING_M` metros (por defecto 25 m) sobre todas las rutas calculadas. Utiliza vectorización con Shapely 2.0 para procesar ~81M puntos en segundos. Guarda `puntos_rutas_25m.gpkg` con columna `route_idx` para trazabilidad.
 
 ### Celda 9 — Mapa de calor (Kernel Density Estimation)
-Implementa KDE estilo QGIS con kernel Quartic sobre los puntos densificados. Parámetros configurables: `HEATMAP_RES_M` (resolución, 30 m), `HEATMAP_BANDWIDTH_M` (radio, 10 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). Usa numpy binning vectorizado + FFT (`scipy.fft`) para procesar 81M puntos en ~20–30 s. Salidas: GeoTIFF con metadatos + PNG inline.
+Implementa KDE estilo QGIS con kernel Quartic sobre los puntos densificados. Parámetros configurables: `HEATMAP_RES_M` (resolución, 30 m), `HEATMAP_BANDWIDTH_M` (radio, 1 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). Usa numpy binning vectorizado + FFT (`scipy.fft`) para procesar 81M puntos en ~20–30 s. Salidas: GeoTIFF con metadatos + PNG inline.
 
 **Bugs corregidos en heatmap:**
 1. **Kernel con pixel_size real** (commit `dbd1595`): El kernel se construye con `pixel_size` medio en vez de `HEATMAP_RES_M`. Usar `HEATMAP_RES_M` para el kernel pero `pixel_size` para el binning genera un desplazamiento sistemático que crece de oeste a este.
@@ -214,10 +214,10 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 5. Los resultados se guardan en `output/session_<timestamp>/`:
    - `red_completa_unificada.gpkg`: rutas calculadas
    - `puntos_rutas_25m.gpkg`: puntos densificados (Celda 8)
-   - `heatmap_30m_10km_quartic.tif`: mapa de calor GeoTIFF (Celda 9)
-   - `heatmap_30m_10km_quartic.png`: mapa de calor PNG (Celda 9)
+   - `heatmap_30m_1km_quartic.tif`: mapa de calor GeoTIFF (Celda 9)
+   - `heatmap_30m_1km_quartic.png`: mapa de calor PNG (Celda 9)
 
-**Para retomar resultados ya calculados**: usa `LCP_MCP_Geometric-retake.ipynb` y ejecuta directamente las celdas 8 y 9 (ya apuntan al directorio de sesión existente).
+**Para retomar resultados ya calculados**: corre solo las celdas 8 y 9 — autodetectan la última sesión de `output/` (buscan `red_completa_unificada.gpkg` y `puntos_rutas_<espaciado>m.gpkg`) cuando `OUTPUT_DIR` no apunta a una sesión válida.
 
 ## Notas técnicas
 
@@ -230,9 +230,9 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 - El ráster de coste debe estar en un CRS proyectado (p. ej. UTM) para que `length_m` sea significativo.
 - **Celda 8 (optimización)**: Usa `shapely.length` + `np.repeat` + `shapely.line_interpolate_point` vectorizado. Speedup: 20–50× sobre bucle Python (~3 min → ~5–10 s).
 - **Celda 9 (optimización)**: Reemplaza `rasterio.features.rasterize` por `shapely.get_coordinates` + `np.add.at` binning vectorizado, y `np.fft` por `scipy.fft` (MKL backend). Speedup: 50–100× sobre rasterize (~20 min → ~10–20 s).
-- **generar_heatmap.py**: Script CLI standalone. Uso: `uv run python generar_heatmap.py <path.gpkg> [--res 30] [--bw 10000] [--kernel quartic]`. El GeoTIFF se guarda en el mismo directorio que el GPKG de entrada.
+- **Tests**: `uv run pytest tests/` — suite en `tests/` (unitarias de `lcp/` + roundtrip Fase 1 → Fase 2).
+- **Robustez**: si un worker de la Fase 1 falla, la ejecución se detiene antes de escribir el GPKG listando los IDs fallidos (nunca una red parcial en silencio); los destinos inalcanzables (coste `inf`) se informan. `load_points_as_dict` lanza `ValueError` con los IDs duplicados.
 - **CRS en visualización**: Celda 6 captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
-- **_diag_global.py**: Script de diagnóstico para verificar que joblib + loky funcione correctamente en Windows.
 - **Datashader**: Instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
 
 ## Licencia y atribución

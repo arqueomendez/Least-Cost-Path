@@ -5,7 +5,6 @@ import os
 import numpy as np
 from numba import njit
 
-
 # Orden por defecto de los offsets de skimage (producto de [-1,0,1]^2 sin (0,0)).
 # Se usa solo como respaldo si un .npz antiguo no almacenó mcp.offsets.
 DEFAULT_OFFSETS = np.array(
@@ -98,7 +97,7 @@ def compute_and_save_cost_surface(args):
         if bbox_buffer is not None and dest_pixels:
             # --- Recorte de bounding-box (NOTA: un buffer fijo NO garantiza la
             #     optimalidad global; el camino mínimo puede salir del recorte). ---
-            all_pixels = [origin_pixel] + list(dest_pixels.values())
+            all_pixels = [origin_pixel, *dest_pixels.values()]
             rows = [p[0] for p in all_pixels]
             cols = [p[1] for p in all_pixels]
             H, W = cost_raster_full.shape

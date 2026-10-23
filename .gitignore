@@ -18,3 +18,7 @@ Thumbs.db
 
 # Entornos
 .env
+
+# Logs de procesamiento
+*.log
+_exec_check.ipynb
