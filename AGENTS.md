@@ -39,7 +39,8 @@ que `pyproject.toml` y `uv.lock` quedan actualizados.
 
 ## 2. Linting y formato
 
-El proyecto usa **ruff** (v0.12.5). La configuración está fijada en
+El proyecto usa **ruff** (v0.17.2, fijado como dependencia dev: `uv run ruff`
+funciona directo desde el entorno del proyecto). La configuración está fijada en
 `pyproject.toml` (`[tool.ruff]` / `[tool.ruff.lint]`) para que el lint sea
 reproducible: `E4/E7/E9/F` (defaults de ruff) más `W605`, `I`, `UP` y `RUF`.
 Quedan excluidos el export generado `LCP_MCP_Geometric.py` (nbconvert) y los
@@ -65,9 +66,9 @@ uv run ruff format --check lcp/pathfinder.py
 Antes de proponer un cambio, ejecuta `ruff check` y `ruff format --check` sobre
 los archivos modificados. No introduzcas errores de lint nuevos.
 
-> **Nota**: Si `uv run ruff check` falla con `program not found`, usa
-> `uv tool run ruff check ...` o instala ruff globalmente:
-> `uv tool install ruff`
+> **Nota**: ruff es dependencia dev del proyecto. Si `uv run ruff` falla con
+> `program not found`, sincronizá el entorno (`uv sync`) o usa el fallback
+> `uv tool run ruff check ...`.
 
 ---
 
