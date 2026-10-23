@@ -21,4 +21,4 @@ Thumbs.db
 
 # Logs de procesamiento
 *.log
-_exec_check.ipynb
+_exec_*.ipynb
