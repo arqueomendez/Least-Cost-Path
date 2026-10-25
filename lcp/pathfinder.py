@@ -147,9 +147,7 @@ def compute_and_save_cost_surface(args):
         # temporales, np.savez plano ahorra ~29 s de zlib por origen en
         # rasters grandes. np.load lee los dos formatos.
         saver = (
-            np.savez_compressed
-            if shared_data.get("compress_npz", True)
-            else np.savez
+            np.savez_compressed if shared_data.get("compress_npz", True) else np.savez
         )
         saver(
             npz_path,

@@ -72,7 +72,7 @@ def test_phase1_npz_compression_policy(tmp_path):
 
     npz_plain, tipos_plain, d_plain = run(False)
     npz_default, tipos_default, _ = run(None)  # clave ausente -> comportamiento actual
-    npz_true, tipos_true, _ = run(True)
+    _npz_true, tipos_true, _ = run(True)
 
     # politica de almacenamiento
     assert all(t == zipfile.ZIP_STORED for t in tipos_plain.values()), tipos_plain
@@ -89,11 +89,17 @@ def test_phase1_npz_compression_policy(tmp_path):
     # Fase 2 sobre npz PLANO (reanudacion sin comprimir)
     with np.load(npz_plain) as data:
         costs = {
-            int(d): float(c)
-            for d, c in zip(data["dest_ids"], data["cost_scalars"])
+            int(d): float(c) for d, c in zip(data["dest_ids"], data["cost_scalars"])
         }
     oid, records = postp.reconstruct_routes_from_disk(
-        (1, _px_to_world((2, 2)), [(5, _px_to_world((10, 10)))], costs, TRANSFORM, d_plain)
+        (
+            1,
+            _px_to_world((2, 2)),
+            [(5, _px_to_world((10, 10)))],
+            costs,
+            TRANSFORM,
+            d_plain,
+        )
     )
     assert oid == 1
     assert len(records) == 1
