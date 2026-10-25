@@ -32,6 +32,16 @@ def test_s2_densify_streams_chunks():
     assert "escritos" in s
 
 
+def test_s4_densify_writes_with_pyogrio():
+    # S4 (perf-fast-io): la escritura de puntos usa geopandas/pyogrio por
+    # chunk (2,9x medido) y no el bucle de records de fiona; sin uso de
+    # fiona en la Celda 8.
+    s = SRC[7]
+    assert "writerecords" not in s
+    assert "to_file(" in s
+    assert "import fiona" not in s
+
+
 def test_s3_tqdm_progress_on_both_phases():
     # S3: tqdm.auto en Fase 1 y Fase 2 (progreso por resultado consumido),
     # con joblib verbose=0 en ambas para no duplicar el ruido.

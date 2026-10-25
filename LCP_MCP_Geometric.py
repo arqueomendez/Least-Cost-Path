@@ -898,7 +898,7 @@ except Exception as e:
 
 
 # ==============================================================================
-# --- CELDA 8: PUNTOS DENSIFICADOS (FIONA DIRECTO, SIN SHAPELY POINTS) ---
+# --- CELDA 8: PUNTOS DENSIFICADOS (PYOGRIO DIRECTO, SIN SHAPELY POINTS) ---
 # ==============================================================================
 import os, time, gc
 import numpy as np
@@ -906,7 +906,6 @@ import geopandas as gpd          # <-- movido al encabezado (lo usan TODAS las r
 import shapely
 from shapely import get_coordinates
 from joblib import Parallel, delayed
-import fiona
 
 SPACING_M = 25.0
 CHUNK_SIZE = 500
@@ -1018,32 +1017,37 @@ results = Parallel(
     n_jobs=N_WORKERS, verbose=10, prefer="processes", return_as="generator_unordered"
 )(delayed(densify_chunk)(*c) for c in chunks)
 
-# ── 6. ESCRIBIR POR LOTE DIRECTO (S2: la memoria solo sostiene un chunk) ──
-print("  [5/5] Escribiendo puntos lote a lote (sin concatenar en memoria)...")
+# ── 6. ESCRIBIR POR LOTE DIRECTO (S2 memoria acotada; S4 pyogrio ~2,9x) ──
+print("  [5/5] Escribiendo puntos lote a lote (pyogrio, sin concatenar)...")
 output_path = os.path.join(OUTPUT_DIR, f'puntos_rutas_{int(SPACING_M)}m.gpkg')
-schema = {'geometry': 'Point', 'properties': {'route_idx': 'int'}}
+layer_name = os.path.splitext(os.path.basename(output_path))[0]
 crs_wkt = None if _crs_rutas is None else str(_crs_rutas)
 n_total = total_pts
 escritos = 0
 
-BATCH = 200_000
-with fiona.open(output_path, 'w', driver='GPKG', schema=schema, crs=crs_wkt) as dst:
-    for xs_c, ys_c, idx_c in results:
-        n_c = len(xs_c)
-        for start in range(0, n_c, BATCH):
-            end = min(start + BATCH, n_c)
-            features = [
-                {'geometry': {'type': 'Point', 'coordinates': (float(xs_c[j]), float(ys_c[j]))},
-                 'properties': {'route_idx': int(idx_c[j])}}
-                for j in range(start, end)
-            ]
-            dst.writerecords(features)
-        escritos += n_c
-        if n_total:
-            print(
-                f"    Escritos {escritos:,} / {n_total:,} ({escritos * 100 // n_total}%)",
-                end='\r',
-            )
+for xs_c, ys_c, idx_c in results:
+    n_c = len(xs_c)
+    if n_c == 0:
+        continue
+    gdf_chunk = gpd.GeoDataFrame(
+        {"route_idx": np.asarray(idx_c, dtype=np.int64)},
+        geometry=gpd.points_from_xy(xs_c, ys_c),
+        crs=crs_wkt,
+    )
+    # capa = stem del archivo (el mismo default que usaba fiona); 'w' crea en
+    # el primer lote y 'a' agrega los siguientes (pyogrio -> OGR en C++).
+    gdf_chunk.to_file(
+        output_path,
+        layer=layer_name,
+        driver="GPKG",
+        mode="a" if os.path.exists(output_path) else "w",
+    )
+    escritos += n_c
+    if n_total:
+        print(
+            f"    Escritos {escritos:,} / {n_total:,} ({escritos * 100 // n_total}%)",
+            end='\r',
+        )
 t2 = time.time()
 t3 = t2  # interp. y escritura se solapan (streaming): no hay fase de concatenacion
 
