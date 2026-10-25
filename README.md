@@ -261,7 +261,7 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 - `MCP_Geometric` emplea un modelo de coste simétrico: el coste de A→B es idéntico al de B→A, por lo que almacenar ambas direcciones sería redundante.
 - La función `reconstruct_path_from_traceback` se compila con `@njit` de Numba la primera vez que se ejecuta. `warm_up_numba()` fuerza esta compilación antes del bucle principal para que no penalice el primer origen real.
 - El buffer del path en Numba está acotado a `traceback.shape[0] + traceback.shape[1]` (filas + columnas del raster). Usar `traceback.size` como tope generaría arrays de ~1.2 GB por llamada, agotando la RAM de los workers silenciosamente.
-- En Fase 1 solo se guarda el traceback comprimido (int8, ~30–80 MB/origen). El array de costes completo (float64, ~1.27 GB/origen) no se persiste; solo se extrae el escalar de coste por destino.
+- En Fase 1 solo se guarda el traceback (int16, 2 B/celda; comprimido solo si `KEEP_PHASE1_FILES=True` — si no, plano y rápido). El array de costes completo (float64, ~1.27 GB/origen) no se persiste; solo se extrae el escalar de coste por destino.
 - La variable `save_path_to_shapefile` en `utils.py` se mantiene por compatibilidad con código anterior; el flujo principal utiliza `build_route_record`.
 - El ráster de coste debe estar en un CRS proyectado (p. ej. UTM) para que `length_m` sea significativo.
 - **Celda 8 (optimización)**: Usa `shapely.length` + `np.repeat` + `shapely.line_interpolate_point` vectorizado. Speedup: 20–50× sobre bucle Python (~3 min → ~5–10 s).
@@ -272,6 +272,7 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 - **CRS en visualización**: Celda 6 captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
 - **Datashader**: Instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
 - **Escalabilidad (N grande)**: la Fase 2 y el densificado de la Celda 8 se escriben de forma **incremental** — la memoria solo sostiene un lote/origen o un chunk, nunca todos los registros (antes: todos los `LineString` en RAM + concatenación global de ~1,6 GB a 81M puntos). Ambas fases muestran progreso con `tqdm`. El orden de filas de los GPKG es el orden de finalización; `route_idx` da la trazabilidad por ruta. *Límite conocido*: la Celda 7 (mapa final) materializa todas las rutas para graficar — con N muy grande usá el PNG ya guardado o evitá esa celda.
+- **Rendimiento (E/S)**: con `KEEP_PHASE1_FILES=False` (lo normal) los `.npz` de Fase 1 se guardan **planos** (~29 s de zlib por origen ahorrados en rasters grandes); el worker usa la **vista del memmap** sin copiar el ráster (+~20–25% de workers por la menor RAM); los puntos se escriben con **pyogrio** (2,9× vs el bucle de fiona). La evaluación completa con benchmarks está en `odd/tasks/perf-fast-io.md`.
 
 ## Licencia y atribución
 

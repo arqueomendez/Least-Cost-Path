@@ -27,13 +27,14 @@ Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `u
 
 ## Tasks
 
-- T1 — S2 — pending — inline — Compresión híbrida (RED: ZIP_STORED/ZIP_DEFLATED + phase2 sobre plano)
-- T2 — S4 — pending — inline — Pyogrio en Celda 8 (RED: pin writerecords/to_file)
-- T3 — S3 — pending — inline — Vista del memmap sin copia + estimador ×4.5
-- T4 — S6 — pending — inline — Verificación integral: batería + corrida de paridad (91/82288/sha)
-- T5 — S1,S5 — pending — inline — Docs (CHANGELOG/AGENTS/README) + cierre (doc, espejo, memoria)
+- T1 — S2 — done — `d1e01ea` + `45860bc` — Compresión híbrida: RED (ZIP_STORED con `compress_npz=False`) → worker con `saver = np.savez_compressed if shared_data.get("compress_npz", True) else np.savez` y Celda 6 pasando `KEEP_PHASE1_FILES`. Test prueba política de almacenamiento, igualdad de contenido entre formatos y **Fase 2 sobre npz plano**. 75 passed + fixes RUF059/format.
+- T2 — S4 — done — `2d599eb` — Pyogrio en Celda 8: RED (pin `writerecords`) → `gdf.to_file` por chunk (`mode w→a`, capa = stem del archivo, el mismo default de fiona), `schema`/`BATCH` fuera, `import fiona` eliminado, header actualizado. 76 passed.
+- T3 — S3 — done — `1828d5d` — Vista del memmap sin copia (ramas bbox y full) + estimador ×5.5→×4.5 con docstring corregido a **int16** (medido). RED del estimador (550 MB/8 MB → 12 workers, no 10) → GREEN; numéricos con vista: 7 passed (8√2). 77 passed.
+- T4 — S6 — done — **PARIDAD OK** (corrida completa exit 0): `MODO: all_pairs`, `Rutas escritas: 91 | esperadas: 91`, `Escritos 82,288 / 82,288`, campos idénticos, **sorted-bincount sha `e79f4274…` idéntico al baseline**, 0 errores; ejercitó los 3 cambios end-to-end (npz plano leídos por Fase 2, pyogrio, vista).
+- T5 — S1,S5 — done — Docs (CHANGELOG/AGENTS/README) + cierre (espejo, memoria) — commit de cierre.
 
 ## Log
 
 - **L1** (directivas del usuario, verbatim): "2. Compresión del npz: no comprimir cuando KEEP_PHASE1_FILES=False pero permitir la reanudación. 3. Copia del raster: aplica. 4. Escritura de la Celda 8: aplica. 5. FFT de la Celda 9: No modificar. 6. Fase 2 y densificado: no modificiar. 7. Overhead fijo (kernel + imports): No modificar. Documenta esta evaluación y eje ejecuta en el orden que propusiste."
 - **L2** (orden de ejecución): compresión → pyogrio Celda 8 → vista sin copia (el orden propuesto en la evaluación). Nota: el dtype real del traceback medido es **int16** (2 B/celda → 316 MB en raster real; AGENTS decía int8 — corregir en T5).
+- **L3** (T1-T4): commits `d1e01ea`/`45860bc`/`2d599eb`/`1828d5d` — RED→GREEN en los 3 cambios con sus pins; paridad final **OK**: sha `e79f4274…` idéntico al baseline de scale-large-n (91 rutas, 82 288 pts, campos iguales, 0 errores). Los benchmarks que sustentan cada veredicto están en la tabla «Evaluación de rendimiento» de este documento.

@@ -326,12 +326,18 @@ Worker: `lcp.pathfinder.compute_and_save_cost_surface(args)`
 - Un worker por origen.
 - Construye `MCP_Geometric` sobre el raster enmascarado.
 - Ejecuta `find_costs` desde el origen.
-- **Guarda solo el traceback** (int8, ~158 MB sin comprimir → ~30–80 MB comprimido)
-  en `phase1_tracebacks/traceback_<origin_id>.npz`.
+- **Guarda solo el traceback** (int16, 2 B/celda → ~316 MB sin comprimir en el
+  raster real) en `phase1_tracebacks/traceback_<origin_id>.npz`. Política de
+  rendimiento: se **comprime solo si `KEEP_PHASE1_FILES=True`** (npz chicos
+  para la reanudación); con `False` (lo normal) se guarda plano con `np.savez`
+  — ahorra ~29 s de zlib por origen en rasters grandes — y el directorio se
+  borra al final igual. `np.load` lee los dos formatos.
 - **No guarda el array de costes completo** (float64, ~1.27 GB/origen). En su lugar,
   extrae el escalar `costs[row, col]` por cada destino y lo retorna como dict ligero.
-- Estimación de RAM por worker: `raster_bytes × 2.125`
-  (raster float64 + costs float64 + traceback int8).
+- El worker entrega la **vista del memmap** a `MCP_Geometric` (sin copia de
+  1,27 GB; MCP solo lee la entrada — verificado). Estimación de RAM por
+  worker: `raster_bytes × 4.5`
+  (costes f64 + heap + offsets + traceback i16, sin copia del raster).
 - Si algún worker falla, la **Celda 6** lista los IDs afectados y **detiene** la
   ejecución antes de la Fase 2 (nunca escribe un GPKG parcial). Los destinos
   inalcanzables (coste `inf`) se informan con sus IDs pero no bloquean.
