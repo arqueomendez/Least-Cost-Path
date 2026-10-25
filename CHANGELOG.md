@@ -3,7 +3,7 @@
 Cambios destacados, agrupados por hito. El detalle vive en los commits
 (Conventional) y en los documentos `odd/tasks/` (specs S#, log L#).
 
-## No publicado — ramas locales (`feature/*` sobre `LCP_MCP_Geometric`)
+## Sin versión — publicado en `origin/LCP_MCP_Geometric` (rama principal)
 
 ### notebook-hardening (robustez del pipeline)
 
@@ -49,7 +49,19 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   las 9 celdas de código.
 - **Higiene**: `ruff` 0.17.2 como dependencia dev (sin fallback), docstring real
   de `run_notebook.py`, `description` real en `pyproject.toml`, **nbstripout**
-  (los outputs dejan de commitearse; filtro local, sin CI), `joblib` 1.6.0
-  (loky 3.6.0; el `KeyError` cosmético del resource_tracker **persiste** — fix
-  upstream en joblib PR#1829 / loky ≥3.7.0 pendiente de release), este CHANGELOG
-  y `CITATION.cff` actualizado.
+  (los outputs dejan de commitearse; filtro local, sin CI),
+  `joblib` anclado a **git main `1.7.dev0`** (loky 3.7.0) que **resolvió el
+  KeyError** del resource_tracker — 0 apariciones vs 5 por corrida antes
+  (commit `878c9e05` fijado en uv.lock; volver a PyPI con `uv add joblib`
+  cuando salga 1.7.0 estable), este CHANGELOG y `CITATION.cff` actualizados.
+- **Integración y publicación**: tres merges `--no-ff` en la rama principal
+  (`notebook-hardening` → `star-origin-mode` → `quality-corrections`) y push a
+  `origin/LCP_MCP_Geometric` (`b65cb74..10689df`); las ramas `feature/*` también
+  quedan subidas al remoto.
+- **Verificación independiente**: REJECT del verificador por la capa
+  `destinos_inalcanzables` no idempotente (`mode="a"` duplicaba filas al
+  re-ejecutar) → reparado con `mode="w"` y **recheck VERIFY**; después, el
+  advisory de filas stale (re-corrida con 0 pares) se cerró escribiendo la capa
+  siempre (vacía cuando no hay pares). Tests endurecidos a 3 corridas con
+  `listlayers` + esquema.
+- **Housekeeping**: `nul` eliminado, stashes antiguos revisados y borrados.
