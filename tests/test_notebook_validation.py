@@ -171,6 +171,58 @@ def test_s8_unreachable_layer_is_idempotent_across_reruns(tmp_path):
     assert sorted(rows) == [(1, 3), (1, 4), (2, 3), (2, 4)], f"duplicados: {rows}"
 
 
+def test_s8_no_stale_rows_when_rerun_has_zero_unreachable(tmp_path):
+    """Advisory L15/L16: una re-corrida en la MISMA sesion que ahora deja
+    0 pares inalcanzables no debe conservar filas stale en la capa."""
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    pts = tmp_path / "pts_stale.shp"
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 60.5, 89.5), (4, 70.5, 89.5)],
+        crs="EPSG:32719",
+    )
+
+    def sources():
+        srcs = nh.build_cells_1_to_4(
+            tmp_path,
+            raster=raster,
+            points=pts,
+            mask=None,
+            fixed_output_name="session_stale",
+            keep_phase1=True,
+        )
+        return [*srcs, nh.load_code_sources()[5]]
+
+    # corrida 1: barrera -> 4 pares inalcanzables
+    _out1, err1 = nh.run_code(sources(), timeout=600)
+    assert err1 is None, err1
+    gpkg = tmp_path / "session_stale" / "red_completa_unificada.gpkg"
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        assert len(src) == 4
+
+    # corrida 2: mismos archivos pero TODOS los puntos del mismo lado de la
+    # barrera -> 0 inalcanzables (la huella cambia: puntos distintos)
+    nh.write_points(
+        pts,
+        [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 30.5, 89.5), (4, 40.5, 89.5)],
+        crs="EPSG:32719",
+    )
+    _out2, err2 = nh.run_code(sources(), timeout=600)
+    assert err2 is None, err2
+
+    with fiona.open(gpkg, layer="destinos_inalcanzables") as src:
+        stale = [
+            (f["properties"]["origin_id"], f["properties"]["dest_id"]) for f in src
+        ]
+    assert stale == [], f"filas stale: {stale}"
+    # la capa principal se reescribio con las 6 rutas ahora alcanzables
+    with fiona.open(gpkg, layer="rutas_unificadas") as src:
+        assert len(src) == 6
+
+
 def test_s9_fingerprint_mismatch_recomputes_phase1(tmp_path):
     """S9: huella distinta -> nunca reutilizar (wipe + recalculo de Fase 1)."""
     import json as _json
