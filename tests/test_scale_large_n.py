@@ -30,3 +30,12 @@ def test_s2_densify_streams_chunks():
     assert "np.concatenate([r[0] for r in results])" not in s
     assert "all_idx" not in s
     assert "escritos" in s
+
+
+def test_s3_tqdm_progress_on_both_phases():
+    # S3: tqdm.auto en Fase 1 y Fase 2 (progreso por resultado consumido),
+    # con joblib verbose=0 en ambas para no duplicar el ruido.
+    s = SRC[5]
+    assert "from tqdm.auto import tqdm" in s
+    assert s.count("tqdm(") >= 2  # una barra por fase (fase1 pbar + fase2)
+    assert "verbose=5" not in s

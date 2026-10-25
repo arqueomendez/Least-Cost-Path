@@ -595,14 +595,26 @@ try:
     print(f"  Total de orígenes a procesar: {len(tasks_p1_run)}")
     t0_p1 = time.time()
 
-    results_p1 = Parallel(n_jobs=n_jobs_p1, backend="loky", verbose=5)(
-        delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run
-    )
+    # S3: progreso por resultado consumido (tqdm.auto) y sin ruido de joblib.
+    # generator_ordered: los escalares son dicts pequenos; el buffer de orden
+    # es irrelevante en memoria y conserva el orden de envio.
+    from tqdm.auto import tqdm
+
+    results_p1 = Parallel(
+        n_jobs=n_jobs_p1, backend="loky", verbose=0, return_as="generator"
+    )(delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run)
+
+    cost_scalars_index = {}
+    with tqdm(
+        total=len(tasks_p1), desc="Fase 1 (MCP)", unit="origen", disable=None
+    ) as pbar1:
+        for oid, cdict in results_p1:
+            cost_scalars_index[oid] = cdict
+            pbar1.update(1)
 
     dur_p1 = time.time() - t0_p1
     print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
-    cost_scalars_index = {oid: cdict for oid, cdict in results_p1}
     cost_scalars_index.update(reusable)
     failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
     n_computed = len(cost_scalars_index) - len(failed_origins)
@@ -657,17 +669,21 @@ try:
 
     if os.path.exists(gpkg_tmp_path):
         os.remove(gpkg_tmp_path)
-    for _origin_id, records in results_p2:
-        if not records:
-            continue
-        gdf_lote = gpd.GeoDataFrame(records, crs=raster_crs)
-        gdf_lote.to_file(
-            gpkg_tmp_path,
-            layer="rutas_unificadas",
-            driver="GPKG",
-            mode="a" if os.path.exists(gpkg_tmp_path) else "w",
-        )
-        n_rutas_escritas += len(records)
+    with tqdm(
+        total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None
+    ) as pbar2:
+        for _origin_id, records in results_p2:
+            pbar2.update(1)
+            if not records:
+                continue
+            gdf_lote = gpd.GeoDataFrame(records, crs=raster_crs)
+            gdf_lote.to_file(
+                gpkg_tmp_path,
+                layer="rutas_unificadas",
+                driver="GPKG",
+                mode="a" if os.path.exists(gpkg_tmp_path) else "w",
+            )
+            n_rutas_escritas += len(records)
 
     dur_p2 = time.time() - t0_p2
     print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
