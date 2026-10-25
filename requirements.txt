@@ -804,9 +804,7 @@ jinja2==3.1.6 \
     #   jupyterlab
     #   jupyterlab-server
     #   nbconvert
-joblib==1.6.0 \
-    --hash=sha256:2ccc96785b12046c08fd6d55839c12857831b54a3c1673ffadd2f04bfc4eda03 \
-    --hash=sha256:3dbbf9f6e4b592a2357b854608e980fe6390d131d7a82f011a377ef2ebef7aba
+joblib @ git+https://github.com/joblib/joblib@878c9e05995b4425079e8f204b3502f5658a67e5
     # via lcp
 json5==0.17.3 \
     --hash=sha256:2c8b22a893c35cd6a3c5ccbf1dd1c7d02c25dc1b5897fea658f9bf08c2e05f9a \

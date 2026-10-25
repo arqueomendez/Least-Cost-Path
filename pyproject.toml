@@ -45,6 +45,9 @@ extend-exclude = [
 # - PLR0402: el proyecto usa `import lcp.modulo as alias` (AGENTS.md 6.1).
 select = ["E4", "E7", "E9", "F", "W605", "I", "UP", "RUF"]
 
+[tool.uv.sources]
+joblib = { git = "https://github.com/joblib/joblib" }
+
 [dependency-groups]
 dev = [
     "nbstripout>=0.9.1",
