@@ -455,8 +455,10 @@ PHASE1_DIR = os.path.join(OUTPUT_DIR, "phase1_tracebacks")
 os.makedirs(PHASE1_DIR, exist_ok=True)
 
 memmap_path = os.path.join(OUTPUT_DIR, "_raster_shared.dat")
-all_route_records = []
-routes_gdf = None
+gpkg_output_path = os.path.join(OUTPUT_DIR, "red_completa_unificada.gpkg")
+gpkg_tmp_path = gpkg_output_path + ".tmp"  # escritura incremental (S1); replace atomico al final
+routes_gdf = None  # None => la Celda 7 lee el GPKG desde disco (nada en memoria)
+n_rutas_escritas = 0
 dur_p1 = dur_p2 = 0.0
 tasks_p1, tasks_p2 = [], []
 n_jobs_p1 = n_jobs_p2 = 0
@@ -631,7 +633,7 @@ try:
             f"{'...' if len(pares_inf) > 10 else ''}."
         )
 
-    # --- PASO 4: FASE 2 ---
+    # --- PASO 4: FASE 2 (streaming: cada lote se escribe, sin acumular en RAM) ---
     n_jobs_p2 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=2)
     print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
@@ -647,28 +649,39 @@ try:
     print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
     t0_p2 = time.time()
 
-    results_p2 = Parallel(n_jobs=n_jobs_p2, backend="loky", verbose=5)(
-        delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2
-    )
+    # S1: generador sin orden -> la memoria solo sostiene UN lote de origen;
+    # cada lote se vuelca al GPKG temporal (modo 'a' tras crear con 'w').
+    results_p2 = Parallel(
+        n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
+    )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
+
+    if os.path.exists(gpkg_tmp_path):
+        os.remove(gpkg_tmp_path)
+    for _origin_id, records in results_p2:
+        if not records:
+            continue
+        gdf_lote = gpd.GeoDataFrame(records, crs=raster_crs)
+        gdf_lote.to_file(
+            gpkg_tmp_path,
+            layer="rutas_unificadas",
+            driver="GPKG",
+            mode="a" if os.path.exists(gpkg_tmp_path) else "w",
+        )
+        n_rutas_escritas += len(records)
 
     dur_p2 = time.time() - t0_p2
-    for origin_id, records in results_p2:
-        all_route_records.extend(records)
-
     print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
-    print(f"  Rutas reconstruidas: {len(all_route_records)}")
+    print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
-    # --- PASO 5: GeoPackage ---
+    # --- PASO 5: GeoPackage (rename atomico del temporal) ---
     print("\n[Paso 5/5] Escribiendo GeoPackage unificado...")
-    gpkg_output_path = os.path.join(OUTPUT_DIR, "red_completa_unificada.gpkg")
 
-    if not all_route_records:
+    if not n_rutas_escritas:
         print("  ADVERTENCIA: no se generó ninguna ruta; se omite la escritura del GPKG.")
         routes_gdf = gpd.GeoDataFrame(geometry=[], crs=raster_crs)
     else:
-        routes_gdf = gpd.GeoDataFrame(all_route_records, crs=raster_crs)
-        routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
-        print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
+        os.replace(gpkg_tmp_path, gpkg_output_path)
+        print(f"[Paso 5/5] {n_rutas_escritas} rutas guardadas en: {gpkg_output_path}")
 
     # --- S8: destinos sin ruta materializados en capa aditiva ---
     # Se escribe SIEMPRE (posiblemente vacia): una re-corrida en la misma
@@ -700,10 +713,10 @@ try:
     else:
         print("  Sin destinos inalcanzables: capa vacia.")
 
-    print(f"  Rutas escritas: {len(all_route_records)} | esperadas: {n_expected}")
-    if len(all_route_records) != n_expected:
+    print(f"  Rutas escritas: {n_rutas_escritas} | esperadas: {n_expected}")
+    if n_rutas_escritas != n_expected:
         print(
-            f"  ADVERTENCIA: rutas reales {len(all_route_records)} != esperadas {n_expected}; "
+            f"  ADVERTENCIA: rutas reales {n_rutas_escritas} != esperadas {n_expected}; "
             "revisa los pares con coste infinito informados arriba."
         )
     pipeline_ok = True
@@ -713,7 +726,7 @@ try:
     print(f"  Fase 1 (MCP, {len(tasks_p1)} orígenes):    {dur_p1:.1f} s  ({n_jobs_p1} workers)")
     print(f"  Fase 2 (rutas, {len(tasks_p2)} orígenes):  {dur_p2:.1f} s  ({n_jobs_p2} workers)")
     print(f"  Total:                         {total_duration:.1f} s")
-    print(f"  Rutas generadas:               {len(routes_gdf)}")
+    print(f"  Rutas generadas:               {n_rutas_escritas}")
     print("="*60)
 
 except Exception as e:
@@ -741,6 +754,14 @@ finally:
             else "ejecucion con error (evidencia conservada)"
         )
         print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR} ({motivo})")
+
+    if os.path.exists(gpkg_tmp_path):
+        # corrida fallida a mitad de escritura: nunca dejar un GPKG parcial
+        try:
+            os.remove(gpkg_tmp_path)
+            print("  GPKG temporal (escritura incompleta) eliminado.")
+        except OSError:
+            pass
 
 
 # ## Celda 7 — Mapa final de la red

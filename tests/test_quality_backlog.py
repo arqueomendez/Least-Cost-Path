@@ -77,10 +77,14 @@ def test_s8_unreachable_layer_written():
     s = SRC[5]
     assert 'layer="destinos_inalcanzables"' in s
     assert "pares_inf" in s
-    # idempotente: reemplaza la capa en cada corrida (nunca append) — el fix
-    # del REJECT L15; `mode="a"` duplicaba registros al re-ejecutar (S8 enmendado)
-    assert 'mode="w"' in s
-    assert 'mode="a"' not in s
+    # idempotente: el to_file de LA CAPA DE DESTINOS usa mode="w" (reemplazo)
+    # — el fix del REJECT L15; nunca append. (mode="a" solo es legitimo en el
+    # GPKG temporal de rutas de S1, fuera de este bloque.)
+    i = s.index("inf_gdf.to_file")
+    j = s.index("mode=", i)
+    bloque = s[i : s.index(")", j)]
+    assert 'mode="w"' in bloque
+    assert 'mode="a"' not in bloque
 
 
 def test_s9_resume_wiring():
