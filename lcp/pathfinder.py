@@ -106,20 +106,20 @@ def compute_and_save_cost_surface(args):
             c_min = max(0, min(cols) - bbox_buffer)
             c_max = min(W, max(cols) + bbox_buffer + 1)
 
-            cost_raster = np.array(
-                cost_raster_full[r_min:r_max, c_min:c_max]
-            )  # copia explícita
-            del cost_raster_full
+            # S3 (perf-fast-io): vista directa del memmap. MCP solo lee la
+            # entrada (verificado: no la muta) y el slice basico de un
+            # C-contiguo es contiguo -> sin copia de 1,27 GB por worker.
+            cost_raster = cost_raster_full[r_min:r_max, c_min:c_max]
 
             origin_pixel_local = (origin_pixel[0] - r_min, origin_pixel[1] - c_min)
             dest_pixels_local = {
                 did: (r - r_min, c - c_min) for did, (r, c) in dest_pixels.items()
             }
         else:
-            # Sin recorte: copia explícita del raster completo (libera el memmap).
+            # Sin recorte: vista directa del memmap (S3: sin copia; liberar el
+            # nombre no aporta porque MCP mantiene la referencia durante el cálculo).
             r_min, c_min = 0, 0
-            cost_raster = np.array(cost_raster_full)
-            del cost_raster_full
+            cost_raster = cost_raster_full
             origin_pixel_local = origin_pixel
             dest_pixels_local = dict(dest_pixels)
 

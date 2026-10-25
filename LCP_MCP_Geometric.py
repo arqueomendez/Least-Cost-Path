@@ -55,7 +55,7 @@ print("Módulos cargados exitosamente.")
 def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
     """
     Estima cuántos workers paralelos caben en la RAM disponible para cada fase.
-    (El traceback de skimage es int32, no int8; las estimaciones son conservadoras.)
+    (El traceback de skimage mide int16 (2 B/celda); las estimaciones son conservadoras.)
     """
     import psutil
     import numpy as np
@@ -65,8 +65,9 @@ def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
     raster_bytes = np.prod(raster_shape) * np.dtype(raster_dtype).itemsize
 
     if phase == 1:
-        # flat_costs (f64) + heap + offsets + traceback (i32) + copia del raster.
-        mem_per_worker = raster_bytes * 5.5
+        # costes planos (f64) + heap + offsets + traceback (i16); SIN copia
+        # del raster: el worker usa la vista del memmap (S3 perf).
+        mem_per_worker = raster_bytes * 4.5
         n_jobs = max(1, int(available_ram * 0.80 / mem_per_worker))
         n_cpu = psutil.cpu_count(logical=True) or 1
         n_jobs = min(n_jobs, n_cpu)
