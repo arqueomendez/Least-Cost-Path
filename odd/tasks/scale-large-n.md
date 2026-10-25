@@ -14,13 +14,14 @@ Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `u
 
 ## Tasks
 
-- T1 — S1 — pending — inline — Celda 6: streaming Fase 2 + GPKG tmp→replace + conteos (pin RED primero)
-- T2 — S2 — pending — inline — Celda 8: escritura por chunk sin concat global (pin RED)
-- T3 — S3 — pending — inline — tqdm.auto en Fase 1/2 (verbose 0)
-- T4 — S4 — pending — inline — Paridad funcional: baseline vs post (91 + 82 288 + bincount) + batería harness + corrida completa
-- T5 — S5 — pending — inline — Docs (AGENTS/README/CHANGELOG) + cierre (doc/espejo/memoria)
+- T1 — S1 — done — `d998898` — Pin RED → streaming de Fase 2 (`generator_unordered`), GPKG temporal + `os.replace` atómico, `n_rutas_escritas` en echoes, `routes_gdf = None` (C7 lee de disco), `finally` limpia el temporal. Incidente: escaping de `python -c` rompió 3 prints `\n` → SyntaxError **atrapado por el harness** → reparado + compile-check de 9 celdas como invariante. 72 passed.
+- T2 — S2 — done — `7898317` — Pin RED → Celda 8 escribe cada chunk directo (sin concat global `xs/ys/idx`, ~1,6 GB a 81M pts), aviso `escritos != esperados`, etiquetas de tiempo coherentes. 73 passed.
+- T3 — S3 — done — `662280b` — Pin RED → `tqdm.auto` sobre RESULTADOS en Fase 1 (`generator` — incidente: `generator_ordered` no existe en el enum de joblib, ValueError **atrapado por el harness**) y Fase 2; `verbose=0` en ambas; anclaje corregido (`tasks_p1_run`, no `tasks_p1`). 74 passed.
+- T4 — S4 — done — **PARIDAD OK**: corrida completa exit 0, 0 outputs de error, `Rutas escritas: 91 | esperadas: 91`, `Escritos 82,288 / 82,288`; rutas **idénticas** al baseline (origin, dest, cost, length, n_vertices — orden-agnóstico); campos idénticos; **sorted(bincount) sha256 idéntico** (`e79f4274…`). El sha del bincount *indexado* difería → era **permuta del orden de filas** (route_idx = posición de fila; T1 documentó orden = finalización) → métrica corregida a orden-agnóstica, sin defecto.
+- T5 — S5 — done — Docs (AGENTS/README/CHANGELOG) + cierre en este commit; espejo Engram y memoria actualizados. Advisory registrado: `TqdmWarning: IProgress not found` cosmético (tqdm.auto cae a texto en kernels sin ipywidgets).
 
 ## Log
 
 - **L1** (petición del usuario, verbatim): "Aplica las soluciones de ### 8. Escala para N muy grandes" — refiriéndose a la evaluación entregada: (i) escritura incremental de rutas [único blocker real], (ii) densify sin concat global, (iii) tqdm progreso; FFT tiling quedaría diferido.
-- **L2** (baseline de paridad capturado antes de tocar código): sesión post-merge `output/session_20261023_015752_Refactored` — rutas 91 (campos origin_id/dest_id/cost_total/length_m/n_vertices), puntos 82 288, `bincount(route_idx)` sha256 registrado en esta sesión (ver T4).
+- **L2** (baseline de paridad capturado antes de tocar código): sesión post-merge `output/session_20261025_175648_Refactored` — rutas 91 (campos origin_id/dest_id/cost_total/length_m/n_vertices), puntos 82 288, `bincount(route_idx)` sha256 registrado en esta sesión (ver T4).
+- **L3** (T1-T4, evidencia e incidentes): commits `d998898`/`7898317`/`662280b`. Tres incidentes **atrapados por los propios checks**: (a) escaping de `python -c` convirtió3 `\n` en saltos literales → SyntaxError detectado por el harness → reparado + compile-check de 9 celdas como invariante; (b) `return_as="generator_ordered"` no existe en joblib (enum: `list|generator|generator_unordered`) → ValueError detectado por el harness → `"generator"`; (c) anclaje T3 usaba `tasks_p1` y el real es `tasks_p1_run` (S9). **Paridad T4**: rutas idénticas orden-agnóstico, 82 288 pts, `sorted(bincount)` sha idéntico; el sha del bincount *indexado* difería → permuta del orden de filas (route_idx = posición de fila; T1 documentó orden = finalización) → métrica corregida a orden-agnóstica, **sin defecto**. Advisory: `TqdmWarning: IProgress not found` cosmético.

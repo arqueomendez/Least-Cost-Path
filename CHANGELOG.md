@@ -65,3 +65,22 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   siempre (vacía cuando no hay pares). Tests endurecidos a 3 corridas con
   `listlayers` + esquema.
 - **Housekeeping**: `nul` eliminado, stashes antiguos revisados y borrados.
+
+### scale-large-n (escala para N muy grandes)
+
+- **Fase 2 incremental**: `return_as="generator_unordered"` — cada lote de
+  origen se escribe a `red_completa_unificada.gpkg.tmp` y se renombra con
+  `os.replace` al final: la Celda 6 **nunca acumula las rutas en RAM** y el
+  GPKG final nunca queda parcial (el `finally` limpia el temporal si falla).
+- **Celda 8 incremental**: los chunks se escriben directos al GPKG de puntos
+  (sin la concatenación global `xs/ys/idx` — ~1,6 GB a 81M puntos) con aviso
+  honesto si `escritos != esperados`.
+- **Progreso**: `tqdm.auto` sobre resultados en Fase 1 y Fase 2 (joblib
+  `verbose=0`; `disable=None` mantiene limpias las salidas headless).
+- **Paridad verificada** contra el baseline pre-cambio: rutas idénticas
+  (coste, longitud, vértices — orden-agnóstico), 82 288 puntos con
+  distribución idéntica (`sorted(bincount)` sha256 igual), campos iguales,
+  0 errores; 74 tests + ruff verdes.
+- *Conocido*: `TqdmWarning: IProgress not found` cosmético en kernels sin
+  ipywidgets; la Celda 7 materializa todas las rutas para graficar (límite
+  documentado en README para N muy grandes).

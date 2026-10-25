@@ -350,6 +350,15 @@ Worker: `lcp.postprocessing.reconstruct_routes_from_disk(args)`
 - Retorna lista de `RouteRecord`.
 - Estimación de RAM por worker: ~80 MB (solo traceback descomprimido).
   Permite hasta `n_cpu × 2` workers.
+- **Escritura incremental (escala)**: los resultados de la Fase 2 se consumen
+  con `return_as="generator_unordered"` y cada lote se escribe directo en
+  `red_completa_unificada.gpkg.tmp` (rename atómico con `os.replace` al final):
+  la Celda 6 **nunca acumula las rutas en RAM** y el GPKG final nunca queda
+  parcial. El orden de filas del GPKG = orden de finalización de los orígenes.
+- Progreso de ambas fases con `tqdm.auto` (joblib `verbose=0`); con
+  `disable=None` las salidas headless quedan limpias. Aviso cosmético posible
+  en kernels sin ipywidgets: `TqdmWarning: IProgress not found` (la barra cae
+  a texto y sigue funcionando).
 
 ### Auto-detección de workers
 

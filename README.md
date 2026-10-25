@@ -271,6 +271,7 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 - **Robustez**: si un worker de la Fase 1 falla, la ejecución se detiene antes de escribir el GPKG listando los IDs fallidos (nunca una red parcial en silencio); los destinos inalcanzables (coste `inf`) se informan. `load_points_as_dict` lanza `ValueError` con los IDs duplicados.
 - **CRS en visualización**: Celda 6 captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
 - **Datashader**: Instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
+- **Escalabilidad (N grande)**: la Fase 2 y el densificado de la Celda 8 se escriben de forma **incremental** — la memoria solo sostiene un lote/origen o un chunk, nunca todos los registros (antes: todos los `LineString` en RAM + concatenación global de ~1,6 GB a 81M puntos). Ambas fases muestran progreso con `tqdm`. El orden de filas de los GPKG es el orden de finalización; `route_idx` da la trazabilidad por ruta. *Límite conocido*: la Celda 7 (mapa final) materializa todas las rutas para graficar — con N muy grande usá el PNG ya guardado o evitá esa celda.
 
 ## Licencia y atribución
 
