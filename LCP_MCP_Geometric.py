@@ -494,6 +494,9 @@ try:
         "raster_dtype": raster_dtype,
         "raster_shape": raster_shape,
         "src_transform": transform,
+        # S2 (perf): comprimir los npz solo si persisten (reanudacion con
+        # archivos chicos); temporales -> np.savez plano, ~29 s/origen mas rapido.
+        "compress_npz": KEEP_PHASE1_FILES,
         # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
     }
 

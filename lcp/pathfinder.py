@@ -142,7 +142,16 @@ def compute_and_save_cost_surface(args):
         npz_path = os.path.join(phase1_dir, f"traceback_{origin_id}.npz")
         # dest_ids/cost_scalars permiten reanudar (S9) sin recomputar el MCP:
         # la Fase 2 puede reconstruirse desde el propio npz.
-        np.savez_compressed(
+        # S2 (perf-fast-io): comprimir solo si los npz van a persistir
+        # (KEEP_PHASE1_FILES=True -> archivos chicos para reanudar); si son
+        # temporales, np.savez plano ahorra ~29 s de zlib por origen en
+        # rasters grandes. np.load lee los dos formatos.
+        saver = (
+            np.savez_compressed
+            if shared_data.get("compress_npz", True)
+            else np.savez
+        )
+        saver(
             npz_path,
             traceback=traceback,
             offsets=offsets,
