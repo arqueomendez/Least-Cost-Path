@@ -20,3 +20,13 @@ def test_s1_phase2_streams_and_writes_incrementally():
     assert "n_rutas_escritas" in s
     # tras el exito, la Celda 7 debe leer desde disco (sin gdf viejo en memoria)
     assert "routes_gdf = None" in s
+
+
+def test_s2_densify_streams_chunks():
+    # S2: el densificado escribe por lote (generator_unordered) y NO
+    # concatena xs/ys/idx globales en el padre (~1.6 GB para 81M pts).
+    s = SRC[7]
+    assert 'return_as="generator_unordered"' in s
+    assert "np.concatenate([r[0] for r in results])" not in s
+    assert "all_idx" not in s
+    assert "escritos" in s

@@ -992,48 +992,50 @@ def densify_chunk(indices, coords_list, lengths, n_pts_arr, spacing):
     return (np.concatenate(chunk_x), np.concatenate(chunk_y),
             np.concatenate(chunk_idx))
 
-# ── 5. EJECUTAR ──
+# ── 5. EJECUTAR (streaming: cada lote se escribe, sin concat global) ──
 t1 = time.time()
 print(f"  [4/5] Interpolando {len(chunks)} lotes...")
-results = Parallel(n_jobs=N_WORKERS, verbose=10, prefer="processes")(
-    delayed(densify_chunk)(*c) for c in chunks
-)
-del chunks; gc.collect()
-t2 = time.time()
+results = Parallel(
+    n_jobs=N_WORKERS, verbose=10, prefer="processes", return_as="generator_unordered"
+)(delayed(densify_chunk)(*c) for c in chunks)
 
-# ── 6. CONCATENAR ──
-print(f"  [5/5] Concatenando y escribiendo GPKG directo...")
-xs = np.concatenate([r[0] for r in results])
-ys = np.concatenate([r[1] for r in results])
-all_idx = np.concatenate([r[2] for r in results])
-del results; gc.collect()
-n_total = len(xs)
-
-# ── 7. GPKG DIRECTO CON FIONA ──
+# ── 6. ESCRIBIR POR LOTE DIRECTO (S2: la memoria solo sostiene un chunk) ──
+print("  [5/5] Escribiendo puntos lote a lote (sin concatenar en memoria)...")
 output_path = os.path.join(OUTPUT_DIR, f'puntos_rutas_{int(SPACING_M)}m.gpkg')
 schema = {'geometry': 'Point', 'properties': {'route_idx': 'int'}}
 crs_wkt = None if _crs_rutas is None else str(_crs_rutas)
+n_total = total_pts
+escritos = 0
 
 BATCH = 200_000
 with fiona.open(output_path, 'w', driver='GPKG', schema=schema, crs=crs_wkt) as dst:
-    for start in range(0, n_total, BATCH):
-        end = min(start + BATCH, n_total)
-        features = [
-            {'geometry': {'type': 'Point', 'coordinates': (float(xs[j]), float(ys[j]))},
-             'properties': {'route_idx': int(all_idx[j])}}
-            for j in range(start, end)
-        ]
-        dst.writerecords(features)
-        print(f"    Escritos {end:,} / {n_total:,} ({end*100//n_total}%)", end='\r')
+    for xs_c, ys_c, idx_c in results:
+        n_c = len(xs_c)
+        for start in range(0, n_c, BATCH):
+            end = min(start + BATCH, n_c)
+            features = [
+                {'geometry': {'type': 'Point', 'coordinates': (float(xs_c[j]), float(ys_c[j]))},
+                 'properties': {'route_idx': int(idx_c[j])}}
+                for j in range(start, end)
+            ]
+            dst.writerecords(features)
+        escritos += n_c
+        if n_total:
+            print(
+                f"    Escritos {escritos:,} / {n_total:,} ({escritos * 100 // n_total}%)",
+                end='\r',
+            )
+t2 = time.time()
+t3 = t2  # interp. y escritura se solapan (streaming): no hay fase de concatenacion
 
-del xs, ys, all_idx; gc.collect()
-t3 = time.time()
+if escritos != n_total:
+    print(f"  ADVERTENCIA: puntos escritos {escritos:,} != esperados {n_total:,}")
 
 gpkg_mb = os.path.getsize(output_path) / 1e6
 print(f"\n\n{'─'*60}")
-print(f"  {n_total:,} puntos | {gpkg_mb:.0f} MB")
+print(f"  {escritos:,} puntos escritos (esperados {n_total:,}) | {gpkg_mb:.0f} MB")
 print(f"  {output_path}")
-print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1f} s")
+print(f"  Interp.+escritura: {t2-t1:.1f} s | TOTAL: {t3-t0:.1f} s")
 print(f"{'─'*60}")
 
 
