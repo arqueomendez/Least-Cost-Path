@@ -3,7 +3,7 @@
 
 # ## Celda 1 — Importaciones y módulos
 # 
-# Carga las librerías del proyecto (rasterio, fiona, geopandas, joblib, matplotlib, psutil) y los módulos del paquete `lcp/` (`data_loader`, `processing`, `pathfinder`, `utils`, `postprocessing`). Si falla esta celda, el entorno no está sincronizado: ejecutá `uv sync`.
+# Carga las librerías del proyecto (rasterio, fiona, geopandas, joblib, matplotlib, psutil) y los módulos del paquete `lcp/` (`data_loader`, `processing`, `pathfinder`, `utils`, `postprocessing`). Si falla esta celda, el entorno no está sincronizado: ejecuta `uv sync`.
 
 # In[ ]:
 
@@ -123,7 +123,7 @@ def warm_up_numba():
 # 
 # - Calcula **todas** las rutas entre **todos** los pares de puntos: para N puntos, N·(N−1)/2 rutas (triángulo superior de la matriz OD). Con los datos de ejemplo (N = 14): **91 rutas**.
 # - Cada origen lanza su propio MCP hacia los destinos con id mayor: el filtro `did > origin_id` es la deduplicación que evita recalcular pares simétricos (la ruta A→B es idéntica a B→A).
-# - **Cuándo usarlo**: cuando necesitás la red completa — matrices OD, corredores entre todos los puntos, densificación de rutas (Celda 8) y mapas de calor (Celda 9).
+# - **Cuándo usarlo**: cuando necesitas la red completa — matrices OD, corredores entre todos los puntos, densificación de rutas (Celda 8) y mapas de calor (Celda 9).
 # 
 # ### 2. `ANALYSIS_MODE = "single_origin"` — un origen contra todos (modo estrella / SSSP)
 # 
@@ -144,14 +144,14 @@ def warm_up_numba():
 # 
 # ### Cómo elegirlo y qué esperar
 # 
-# - Editá `ANALYSIS_MODE` y `ORIGIN_ID` en la **Celda 3** (etiquetada `parameters`), o ejecutalo sin abrir Jupyter:
+# - Edita `ANALYSIS_MODE` y `ORIGIN_ID` en la **Celda 3** (etiquetada `parameters`), o ejecutalo sin abrir Jupyter:
 # 
 # ```sh
 # uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
 # ```
 # 
 # - **Salida**: el mismo GeoPackage de siempre (`red_completa_unificada.gpkg`) con los mismos campos (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`), solo que con N−1 filas en modo estrella.
-# - La **Celda 6** imprime `MODO: ... | rutas esperadas: N` al arrancar y, al final, compara las rutas reales con las esperadas: si difieren, revisá los destinos con coste infinito (inalcanzables) que se informan arriba.
+# - La **Celda 6** imprime `MODO: ... | rutas esperadas: N` al arrancar y, al final, compara las rutas reales con las esperadas: si difieren, revisa los destinos con coste infinito (inalcanzables) que se informan arriba.
 # 
 
 # In[ ]:

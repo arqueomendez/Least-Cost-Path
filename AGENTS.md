@@ -67,7 +67,7 @@ Antes de proponer un cambio, ejecuta `ruff check` y `ruff format --check` sobre
 los archivos modificados. No introduzcas errores de lint nuevos.
 
 > **Nota**: ruff es dependencia dev del proyecto. Si `uv run ruff` falla con
-> `program not found`, sincronizá el entorno (`uv sync`) o usa el fallback
+> `program not found`, sincroniza el entorno (`uv sync`) o usa el fallback
 > `uv tool run ruff check ...`.
 
 ---
