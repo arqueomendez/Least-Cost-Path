@@ -1,7 +1,7 @@
 # Feature: perf-fast-io
 
 Objetivo: aplicar en orden las mejoras de rendimiento aprobadas sobre la evaluación con benchmarks — (1) política híbrida de compresión del npz, (2) escritura de la Celda 8 con pyogrio, (3) vista del memmap sin copia — sin tocar FFT, Fase 2/densify ni imports.
-Branch: `feature/perf-fast-io` (apilada sobre `feature/scale-large-n`). Entrega: commits locales.
+Branch: `feature/scale-large-n` — **corrección (L4)**: los commits de este feature (`d1e01ea..5ab9346`) quedaron en la rama `feature/scale-large-n` (no se creó `feature/perf-fast-io`; el checkout se omitió al iniciar). Los dos features (scale-large-n + perf-fast-io) viven juntos en esa rama, apilada sobre `LCP_MCP_Geometric`. Entrega: commits locales → **push de la rama en L4**.
 Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `uv run ruff format --check .`; corrida funcional de paridad al cierre.
 
 ## Evaluación de rendimiento (evidencia — benchmarks en esta máquina)
@@ -38,3 +38,4 @@ Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `u
 - **L1** (directivas del usuario, verbatim): "2. Compresión del npz: no comprimir cuando KEEP_PHASE1_FILES=False pero permitir la reanudación. 3. Copia del raster: aplica. 4. Escritura de la Celda 8: aplica. 5. FFT de la Celda 9: No modificar. 6. Fase 2 y densificado: no modificiar. 7. Overhead fijo (kernel + imports): No modificar. Documenta esta evaluación y eje ejecuta en el orden que propusiste."
 - **L2** (orden de ejecución): compresión → pyogrio Celda 8 → vista sin copia (el orden propuesto en la evaluación). Nota: el dtype real del traceback medido es **int16** (2 B/celda → 316 MB en raster real; AGENTS decía int8 — corregir en T5).
 - **L3** (T1-T4): commits `d1e01ea`/`45860bc`/`2d599eb`/`1828d5d` — RED→GREEN en los 3 cambios con sus pins; paridad final **OK**: sha `e79f4274…` idéntico al baseline de scale-large-n (91 rutas, 82 288 pts, campos iguales, 0 errores). Los benchmarks que sustentan cada veredicto están en la tabla «Evaluación de rendimiento» de este documento.
+- **L4** (commit+push del usuario, verbatim: "realiza commit y push"): no había cambios pendientes de commit en el árbol; se corrigió la cabecera de branch de este documento (el checkout a `feature/perf-fast-io` nunca ocurrió — los10 commits sin publicar están en `feature/scale-large-n`) y se subió esa rama a origin con los10 commits (5 de scale-large-n + 6 de perf-fast-io contando los docs… total10: scale T1-T3+docs =4, perf =6). `origin/LCP_MCP_Geometric` queda a 0 commits de retraso; la rama principal NO recibe los merges de estos dos features (pendiente de decisión del usuario, como en iteraciones anteriores).
