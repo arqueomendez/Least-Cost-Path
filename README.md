@@ -14,7 +14,7 @@ La herramienta calcula el conjunto completo de rutas entre todos los pares de pu
 - **Modo `single_origin` (1 contra todos)**: con `ANALYSIS_MODE = "single_origin"` y un `ORIGIN_ID`, solo se calculan las N−1 rutas desde ese origen hacia el resto (estilo SSSP / `source=` de NetworkX), sin pares entre los destinos. Se elige editando la Celda 3 o desde CLI con `papermill -p` (ver sección propia).
 - **Ejecución paralela en dos fases con joblib** (`loky` backend): el análisis se divide en Fase 1 (calcular y guardar superficies de coste por origen) y Fase 2 (reconstruir rutas desde disco). El número de workers se auto-detecta según la RAM disponible para cada fase. El ráster se comparte mediante un archivo `memmap` en disco.
 - Permite restringir el área de búsqueda a un polígono vectorial (shapefile o GeoPackage) para excluir zonas no accesibles.
-- Acumula todos los resultados en memoria y escribe un único GeoPackage al final, con atributos enriquecidos por ruta.
+- Escribe los resultados de forma **incremental**: cada lote de la Fase 2 va directo a `red_completa_unificada.gpkg.tmp` y se renombra de forma atómica al final — nunca acumula todas las rutas en RAM ni deja un GPKG parcial — con atributos enriquecidos por ruta.
 - Verbosidad configurable mediante el parámetro `VERBOSE`.
 - Incluye celdas de validación de datos de entrada y visualización diagnóstica.
 - **Post-procesamiento**: generación de puntos densificados sobre rutas (Celda 8) y mapas de calor tipo QGIS (Celda 9).
@@ -44,6 +44,8 @@ La herramienta calcula el conjunto completo de rutas entre todos los pares de pu
 - **`requirements.txt`**: Lista de dependencias en formato pip.
 - **`LICENSE`**: Licencia de uso (CC BY-NC 4.0).
 - **`CITATION.cff`**: Metadatos de citación.
+- **`CHANGELOG.md`**: Historial de cambios por hito.
+- **`AGENTS.md`**: Instrucciones para agentes de IA que operen el repositorio.
 - **`README.md`**: Este archivo.
 
 ## Formato de salida
@@ -53,13 +55,13 @@ Cada ruta calculada se almacena como un registro con los siguientes atributos:
 | Campo        | Tipo    | Descripción                                              |
 |--------------|---------|----------------------------------------------------------|
 | `geometry`   | LineString | Geometría de la ruta en el CRS del proyecto           |
-| `origin_id`  | entero  | ID del punto de origen (siempre el menor del par)        |
-| `dest_id`    | entero  | ID del punto de destino (siempre el mayor del par)       |
+| `origin_id`  | entero  | ID del origen (en `all_pairs`, el menor del par; en `single_origin`, siempre `ORIGIN_ID`) | 
+| `dest_id`    | entero  | ID del destino (en `all_pairs`, el mayor del par)        |
 | `cost_total` | real    | Coste acumulado MCP en el píxel de destino               |
 | `length_m`   | real    | Longitud de la ruta en metros (CRS proyectado)           |
 | `n_vertices` | entero  | Número de vértices del camino reconstruido               |
 
-Todos los registros se exportan en un único archivo **`red_completa_unificada.gpkg`** dentro de la carpeta de sesión.
+Todos los registros se exportan en un único archivo **`red_completa_unificada.gpkg`** dentro de la carpeta de sesión — con la capa `rutas_unificadas` y, cuando hay destinos con coste infinito, la capa **`destinos_inalcanzables`** (`origin_id`, `dest_id`, `cost_total=inf`; se reescribe en cada corrida para no dejar filas viejas). El `.gpkg.tmp` que aparece durante la escritura incremental es transitorio: se renombra al final o se elimina si la corrida falla.
 
 La carpeta de sesión tiene la siguiente estructura:
 
@@ -80,7 +82,7 @@ output/session_<timestamp>_Refactored/
 El flujo implementado en `LCP_MCP_Geometric.ipynb` sigue estos pasos:
 
 ### Celda 1 — Importaciones
-Carga de librerías: `numpy`, `rasterio`, `fiona`, `geopandas`, `scikit-image`, `numba`, `tqdm`, y los módulos del paquete `lcp`.
+Carga de librerías: `numpy`, `rasterio`, `fiona`, `geopandas`, `scikit-image`, `numba`, y los módulos del paquete `lcp`. (La barra de progreso con `tqdm.auto` se importa en la Celda 6.)
 
 ### Celda 2 — Definición de funciones
 Define `_calculate_n_jobs_for_phase` (auto-detección de workers por fase según RAM disponible) y `warm_up_numba` (primer llamado a la función Numba JIT para compilarla antes del bucle principal).
@@ -99,19 +101,20 @@ Parámetros editables por el usuario:
 | `OUTPUT_DIR`           | Carpeta de salida (generada automáticamente con marca de tiempo)             |
 | `VERBOSE`              | `True` imprime detalles por ruta; `False` suprime el ruido                  |
 | `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
+| `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
 
 ### Celda 4 — Verificación de coherencia de datos
-Valida que todos los puntos de entrada se encuentren dentro del área de búsqueda definida por la máscara. Si algún punto queda fuera, la ejecución se detiene con un mensaje de error.
+Valida CRS idénticos (ráster/puntos/máscara), solape espacial y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o `nodata` — los IDs problemáticos se listan). En modo `single_origin` comprueba además que el modo sea válido, que haya ≥ 2 puntos y que `ORIGIN_ID` exista. Cualquier problema **detiene la ejecución** con un mensaje concreto antes de calcular nada.
 
 ### Celda 5 — Visualización diagnóstica
-Genera un mapa del ráster de coste con los puntos superpuestos para verificar visualmente la configuración antes de lanzar el análisis.
+Genera un mapa del ráster de coste con los puntos superpuestos para verificar visualmente la configuración antes de lanzar el análisis. En modo `single_origin`, resalta el origen con una estrella.
 
 ### Celda 6 — Ejecución principal (dos fases paralelas)
 1. Crea la carpeta de sesión y escribe el memmap compartido del raster.
 2. Compila la función Numba JIT con `warm_up_numba()`.
-3. **Fase 1**: ejecuta en paralelo `compute_and_save_cost_surface` por cada origen. Cada worker construye `MCP_Geometric`, extrae costes escalares por destino y guarda el traceback comprimido en `phase1_tracebacks/traceback_<id>.npz`.
+3. **Fase 1**: ejecuta en paralelo `compute_and_save_cost_surface` por cada origen. Cada worker construye `MCP_Geometric`, extrae costes escalares por destino y guarda el traceback en `phase1_tracebacks/traceback_<id>.npz` (comprimido si `KEEP_PHASE1_FILES=True`; **plano y rápido** si no). Con `RESUME = True`, los `.npz` con huella coincidente se reutilizan y solo se computan los pendientes.
 4. **Fase 2**: ejecuta en paralelo `reconstruct_routes_from_disk` por cada origen. Cada worker carga el traceback desde disco y reconstruye todos los caminos con Numba.
-5. Consolida todos los registros en un `GeoDataFrame` y escribe `red_completa_unificada.gpkg`. Elimina archivos intermedios si `KEEP_PHASE1_FILES = False`.
+5. Escribe cada lote directo (generador de joblib sin orden) a `red_completa_unificada.gpkg.tmp` y lo renombra con `os.replace` al final; imprime `MODO: ... | rutas esperadas: N` y compara reales vs esperadas. Elimina `phase1_tracebacks/` si `KEEP_PHASE1_FILES = False`.
 
 ### Celda 7 — Visualización y exportación final
 Carga el GeoPackage desde memoria (o disco si es necesario) y genera un mapa final de la red de rutas calculadas, con escala y norte. Incluye armonización automática de CRS para evitar desplazamientos entre el ráster y las capas vectoriales.
@@ -120,7 +123,7 @@ Carga el GeoPackage desde memoria (o disco si es necesario) y genera un mapa fin
 Genera puntos cada `SPACING_M` metros (por defecto 25 m) sobre todas las rutas calculadas. Utiliza vectorización con Shapely 2.0 para procesar ~81M puntos en segundos. Guarda `puntos_rutas_25m.gpkg` con columna `route_idx` para trazabilidad.
 
 ### Celda 9 — Mapa de calor (Kernel Density Estimation)
-Implementa KDE estilo QGIS con kernel Quartic sobre los puntos densificados. Parámetros configurables: `HEATMAP_RES_M` (resolución, 30 m), `HEATMAP_BANDWIDTH_M` (radio, 1 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). Usa numpy binning vectorizado + FFT (`scipy.fft`) para procesar 81M puntos en ~20–30 s. Salidas: GeoTIFF con metadatos + PNG inline.
+Implementa KDE estilo QGIS con kernel Quartic sobre los puntos densificados. Parámetros configurables: `HEATMAP_RES_M` (resolución, 30 m), `HEATMAP_BANDWIDTH_M` (radio, 1 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). Usa numpy binning vectorizado + FFT (`scipy.fft`) para procesar 81M puntos en ~20–30 s — la lógica vive en `_compute_heatmap` (con tests de regresión: pico, georreferenciación y masa del kernel). Salidas: GeoTIFF con metadatos + PNG inline.
 
 **Bugs corregidos en heatmap:**
 1. **Kernel con pixel_size real** (commit `dbd1595`): El kernel se construye con `pixel_size` medio en vez de `HEATMAP_RES_M`. Usar `HEATMAP_RES_M` para el kernel pero `pixel_size` para el binning genera un desplazamiento sistemático que crece de oeste a este.
@@ -144,6 +147,7 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 - `tqdm`
 - `joblib`
 - `datashader` (opcional, para heatmaps alternativos)
+- **Herramientas dev** (en `pyproject.toml`): `pytest` (tests), `ruff` (lint/format), `papermill` (ejecución parametrizada sin abrir Jupyter), `nbstripout` (limpieza de outputs al hacer `git add`).
 
 ## Instalación y uso con UV y Jupyter Lab
 
@@ -213,7 +217,7 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
    - `ID_FIELD_NAME`: nombre del campo ID en la capa de puntos.
    - `ANALYSIS_MODE` + `ORIGIN_ID`: modo de análisis (ver sección «Modo single_origin»).
 
-4. Ejecuta las celdas en orden (1 → 9). Las celdas 8 y 9 son post-procesamiento opcional.
+4. Ejecuta las celdas de código en orden (1 → 9); cada una está precedida de su celda markdown explicativa en español. Las celdas 8 y 9 son post-procesamiento opcional.
 
 5. Los resultados se guardan en `output/session_<timestamp>/`:
    - `red_completa_unificada.gpkg`: rutas calculadas
