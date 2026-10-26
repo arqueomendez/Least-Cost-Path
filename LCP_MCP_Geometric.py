@@ -55,7 +55,7 @@ print("Módulos cargados exitosamente.")
 def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
     """
     Estima cuántos workers paralelos caben en la RAM disponible para cada fase.
-    (El traceback de skimage es int32, no int8; las estimaciones son conservadoras.)
+    (El traceback de skimage mide int16 (2 B/celda); las estimaciones son conservadoras.)
     """
     import psutil
     import numpy as np
@@ -65,8 +65,9 @@ def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
     raster_bytes = np.prod(raster_shape) * np.dtype(raster_dtype).itemsize
 
     if phase == 1:
-        # flat_costs (f64) + heap + offsets + traceback (i32) + copia del raster.
-        mem_per_worker = raster_bytes * 5.5
+        # costes planos (f64) + heap + offsets + traceback (i16); SIN copia
+        # del raster: el worker usa la vista del memmap (S3 perf).
+        mem_per_worker = raster_bytes * 4.5
         n_jobs = max(1, int(available_ram * 0.80 / mem_per_worker))
         n_cpu = psutil.cpu_count(logical=True) or 1
         n_jobs = min(n_jobs, n_cpu)
@@ -455,8 +456,10 @@ PHASE1_DIR = os.path.join(OUTPUT_DIR, "phase1_tracebacks")
 os.makedirs(PHASE1_DIR, exist_ok=True)
 
 memmap_path = os.path.join(OUTPUT_DIR, "_raster_shared.dat")
-all_route_records = []
-routes_gdf = None
+gpkg_output_path = os.path.join(OUTPUT_DIR, "red_completa_unificada.gpkg")
+gpkg_tmp_path = gpkg_output_path + ".tmp"  # escritura incremental (S1); replace atomico al final
+routes_gdf = None  # None => la Celda 7 lee el GPKG desde disco (nada en memoria)
+n_rutas_escritas = 0
 dur_p1 = dur_p2 = 0.0
 tasks_p1, tasks_p2 = [], []
 n_jobs_p1 = n_jobs_p2 = 0
@@ -492,6 +495,9 @@ try:
         "raster_dtype": raster_dtype,
         "raster_shape": raster_shape,
         "src_transform": transform,
+        # S2 (perf): comprimir los npz solo si persisten (reanudacion con
+        # archivos chicos); temporales -> np.savez plano, ~29 s/origen mas rapido.
+        "compress_npz": KEEP_PHASE1_FILES,
         # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
     }
 
@@ -593,14 +599,26 @@ try:
     print(f"  Total de orígenes a procesar: {len(tasks_p1_run)}")
     t0_p1 = time.time()
 
-    results_p1 = Parallel(n_jobs=n_jobs_p1, backend="loky", verbose=5)(
-        delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run
-    )
+    # S3: progreso por resultado consumido (tqdm.auto) y sin ruido de joblib.
+    # generator_ordered: los escalares son dicts pequenos; el buffer de orden
+    # es irrelevante en memoria y conserva el orden de envio.
+    from tqdm.auto import tqdm
+
+    results_p1 = Parallel(
+        n_jobs=n_jobs_p1, backend="loky", verbose=0, return_as="generator"
+    )(delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run)
+
+    cost_scalars_index = {}
+    with tqdm(
+        total=len(tasks_p1), desc="Fase 1 (MCP)", unit="origen", disable=None
+    ) as pbar1:
+        for oid, cdict in results_p1:
+            cost_scalars_index[oid] = cdict
+            pbar1.update(1)
 
     dur_p1 = time.time() - t0_p1
     print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
-    cost_scalars_index = {oid: cdict for oid, cdict in results_p1}
     cost_scalars_index.update(reusable)
     failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
     n_computed = len(cost_scalars_index) - len(failed_origins)
@@ -631,7 +649,7 @@ try:
             f"{'...' if len(pares_inf) > 10 else ''}."
         )
 
-    # --- PASO 4: FASE 2 ---
+    # --- PASO 4: FASE 2 (streaming: cada lote se escribe, sin acumular en RAM) ---
     n_jobs_p2 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=2)
     print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
@@ -647,28 +665,43 @@ try:
     print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
     t0_p2 = time.time()
 
-    results_p2 = Parallel(n_jobs=n_jobs_p2, backend="loky", verbose=5)(
-        delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2
-    )
+    # S1: generador sin orden -> la memoria solo sostiene UN lote de origen;
+    # cada lote se vuelca al GPKG temporal (modo 'a' tras crear con 'w').
+    results_p2 = Parallel(
+        n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
+    )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
+
+    if os.path.exists(gpkg_tmp_path):
+        os.remove(gpkg_tmp_path)
+    with tqdm(
+        total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None
+    ) as pbar2:
+        for _origin_id, records in results_p2:
+            pbar2.update(1)
+            if not records:
+                continue
+            gdf_lote = gpd.GeoDataFrame(records, crs=raster_crs)
+            gdf_lote.to_file(
+                gpkg_tmp_path,
+                layer="rutas_unificadas",
+                driver="GPKG",
+                mode="a" if os.path.exists(gpkg_tmp_path) else "w",
+            )
+            n_rutas_escritas += len(records)
 
     dur_p2 = time.time() - t0_p2
-    for origin_id, records in results_p2:
-        all_route_records.extend(records)
-
     print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
-    print(f"  Rutas reconstruidas: {len(all_route_records)}")
+    print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
-    # --- PASO 5: GeoPackage ---
+    # --- PASO 5: GeoPackage (rename atomico del temporal) ---
     print("\n[Paso 5/5] Escribiendo GeoPackage unificado...")
-    gpkg_output_path = os.path.join(OUTPUT_DIR, "red_completa_unificada.gpkg")
 
-    if not all_route_records:
+    if not n_rutas_escritas:
         print("  ADVERTENCIA: no se generó ninguna ruta; se omite la escritura del GPKG.")
         routes_gdf = gpd.GeoDataFrame(geometry=[], crs=raster_crs)
     else:
-        routes_gdf = gpd.GeoDataFrame(all_route_records, crs=raster_crs)
-        routes_gdf.to_file(gpkg_output_path, driver="GPKG", layer="rutas_unificadas")
-        print(f"[Paso 5/5] {len(routes_gdf)} rutas guardadas en: {gpkg_output_path}")
+        os.replace(gpkg_tmp_path, gpkg_output_path)
+        print(f"[Paso 5/5] {n_rutas_escritas} rutas guardadas en: {gpkg_output_path}")
 
     # --- S8: destinos sin ruta materializados en capa aditiva ---
     # Se escribe SIEMPRE (posiblemente vacia): una re-corrida en la misma
@@ -700,10 +733,10 @@ try:
     else:
         print("  Sin destinos inalcanzables: capa vacia.")
 
-    print(f"  Rutas escritas: {len(all_route_records)} | esperadas: {n_expected}")
-    if len(all_route_records) != n_expected:
+    print(f"  Rutas escritas: {n_rutas_escritas} | esperadas: {n_expected}")
+    if n_rutas_escritas != n_expected:
         print(
-            f"  ADVERTENCIA: rutas reales {len(all_route_records)} != esperadas {n_expected}; "
+            f"  ADVERTENCIA: rutas reales {n_rutas_escritas} != esperadas {n_expected}; "
             "revisa los pares con coste infinito informados arriba."
         )
     pipeline_ok = True
@@ -713,7 +746,7 @@ try:
     print(f"  Fase 1 (MCP, {len(tasks_p1)} orígenes):    {dur_p1:.1f} s  ({n_jobs_p1} workers)")
     print(f"  Fase 2 (rutas, {len(tasks_p2)} orígenes):  {dur_p2:.1f} s  ({n_jobs_p2} workers)")
     print(f"  Total:                         {total_duration:.1f} s")
-    print(f"  Rutas generadas:               {len(routes_gdf)}")
+    print(f"  Rutas generadas:               {n_rutas_escritas}")
     print("="*60)
 
 except Exception as e:
@@ -741,6 +774,14 @@ finally:
             else "ejecucion con error (evidencia conservada)"
         )
         print(f"  Tracebacks de Fase 1 conservados en: {PHASE1_DIR} ({motivo})")
+
+    if os.path.exists(gpkg_tmp_path):
+        # corrida fallida a mitad de escritura: nunca dejar un GPKG parcial
+        try:
+            os.remove(gpkg_tmp_path)
+            print("  GPKG temporal (escritura incompleta) eliminado.")
+        except OSError:
+            pass
 
 
 # ## Celda 7 — Mapa final de la red
@@ -858,7 +899,7 @@ except Exception as e:
 
 
 # ==============================================================================
-# --- CELDA 8: PUNTOS DENSIFICADOS (FIONA DIRECTO, SIN SHAPELY POINTS) ---
+# --- CELDA 8: PUNTOS DENSIFICADOS (PYOGRIO DIRECTO, SIN SHAPELY POINTS) ---
 # ==============================================================================
 import os, time, gc
 import numpy as np
@@ -866,7 +907,6 @@ import geopandas as gpd          # <-- movido al encabezado (lo usan TODAS las r
 import shapely
 from shapely import get_coordinates
 from joblib import Parallel, delayed
-import fiona
 
 SPACING_M = 25.0
 CHUNK_SIZE = 500
@@ -971,48 +1011,55 @@ def densify_chunk(indices, coords_list, lengths, n_pts_arr, spacing):
     return (np.concatenate(chunk_x), np.concatenate(chunk_y),
             np.concatenate(chunk_idx))
 
-# ── 5. EJECUTAR ──
+# ── 5. EJECUTAR (streaming: cada lote se escribe, sin concat global) ──
 t1 = time.time()
 print(f"  [4/5] Interpolando {len(chunks)} lotes...")
-results = Parallel(n_jobs=N_WORKERS, verbose=10, prefer="processes")(
-    delayed(densify_chunk)(*c) for c in chunks
-)
-del chunks; gc.collect()
-t2 = time.time()
+results = Parallel(
+    n_jobs=N_WORKERS, verbose=10, prefer="processes", return_as="generator_unordered"
+)(delayed(densify_chunk)(*c) for c in chunks)
 
-# ── 6. CONCATENAR ──
-print(f"  [5/5] Concatenando y escribiendo GPKG directo...")
-xs = np.concatenate([r[0] for r in results])
-ys = np.concatenate([r[1] for r in results])
-all_idx = np.concatenate([r[2] for r in results])
-del results; gc.collect()
-n_total = len(xs)
-
-# ── 7. GPKG DIRECTO CON FIONA ──
+# ── 6. ESCRIBIR POR LOTE DIRECTO (S2 memoria acotada; S4 pyogrio ~2,9x) ──
+print("  [5/5] Escribiendo puntos lote a lote (pyogrio, sin concatenar)...")
 output_path = os.path.join(OUTPUT_DIR, f'puntos_rutas_{int(SPACING_M)}m.gpkg')
-schema = {'geometry': 'Point', 'properties': {'route_idx': 'int'}}
+layer_name = os.path.splitext(os.path.basename(output_path))[0]
 crs_wkt = None if _crs_rutas is None else str(_crs_rutas)
+n_total = total_pts
+escritos = 0
 
-BATCH = 200_000
-with fiona.open(output_path, 'w', driver='GPKG', schema=schema, crs=crs_wkt) as dst:
-    for start in range(0, n_total, BATCH):
-        end = min(start + BATCH, n_total)
-        features = [
-            {'geometry': {'type': 'Point', 'coordinates': (float(xs[j]), float(ys[j]))},
-             'properties': {'route_idx': int(all_idx[j])}}
-            for j in range(start, end)
-        ]
-        dst.writerecords(features)
-        print(f"    Escritos {end:,} / {n_total:,} ({end*100//n_total}%)", end='\r')
+for xs_c, ys_c, idx_c in results:
+    n_c = len(xs_c)
+    if n_c == 0:
+        continue
+    gdf_chunk = gpd.GeoDataFrame(
+        {"route_idx": np.asarray(idx_c, dtype=np.int64)},
+        geometry=gpd.points_from_xy(xs_c, ys_c),
+        crs=crs_wkt,
+    )
+    # capa = stem del archivo (el mismo default que usaba fiona); 'w' crea en
+    # el primer lote y 'a' agrega los siguientes (pyogrio -> OGR en C++).
+    gdf_chunk.to_file(
+        output_path,
+        layer=layer_name,
+        driver="GPKG",
+        mode="a" if os.path.exists(output_path) else "w",
+    )
+    escritos += n_c
+    if n_total:
+        print(
+            f"    Escritos {escritos:,} / {n_total:,} ({escritos * 100 // n_total}%)",
+            end='\r',
+        )
+t2 = time.time()
+t3 = t2  # interp. y escritura se solapan (streaming): no hay fase de concatenacion
 
-del xs, ys, all_idx; gc.collect()
-t3 = time.time()
+if escritos != n_total:
+    print(f"  ADVERTENCIA: puntos escritos {escritos:,} != esperados {n_total:,}")
 
 gpkg_mb = os.path.getsize(output_path) / 1e6
 print(f"\n\n{'─'*60}")
-print(f"  {n_total:,} puntos | {gpkg_mb:.0f} MB")
+print(f"  {escritos:,} puntos escritos (esperados {n_total:,}) | {gpkg_mb:.0f} MB")
 print(f"  {output_path}")
-print(f"  Interpolación: {t2-t1:.1f} s | GPKG: {t3-t2:.1f} s | TOTAL: {t3-t0:.1f} s")
+print(f"  Interp.+escritura: {t2-t1:.1f} s | TOTAL: {t3-t0:.1f} s")
 print(f"{'─'*60}")
 
 

@@ -64,6 +64,15 @@ def test_n_jobs_phase2_uses_80mb_budget(monkeypatch):
     assert fn((1000, 1000), "float64", 2) == 32
 
 
+def test_n_jobs_phase1_reflects_no_copy_estimate(monkeypatch):
+    # S3 (perf-fast-io): sin copia del raster el presupuesto baja de x5.5 a
+    # x4.5 -> mas workers con la misma RAM. 550 MB libres y raster de 8 MB:
+    # x5.5 (44 MB/worker) daria 10; x4.5 (36 MB/worker) daria 12.
+    fn = _n_jobs_fn()
+    _stub(monkeypatch, 550 * 1024**2, 64)
+    assert fn((1000, 1000), "float64", 1) == 12
+
+
 def test_s7_single_origin_requires_two_points():
     # S7: el modo estrella con N=1 (sin destinos) debe fallar temprano en la
     # Celda 4, no generar un task degenerado en la Fase 1.
@@ -77,10 +86,14 @@ def test_s8_unreachable_layer_written():
     s = SRC[5]
     assert 'layer="destinos_inalcanzables"' in s
     assert "pares_inf" in s
-    # idempotente: reemplaza la capa en cada corrida (nunca append) — el fix
-    # del REJECT L15; `mode="a"` duplicaba registros al re-ejecutar (S8 enmendado)
-    assert 'mode="w"' in s
-    assert 'mode="a"' not in s
+    # idempotente: el to_file de LA CAPA DE DESTINOS usa mode="w" (reemplazo)
+    # — el fix del REJECT L15; nunca append. (mode="a" solo es legitimo en el
+    # GPKG temporal de rutas de S1, fuera de este bloque.)
+    i = s.index("inf_gdf.to_file")
+    j = s.index("mode=", i)
+    bloque = s[i : s.index(")", j)]
+    assert 'mode="w"' in bloque
+    assert 'mode="a"' not in bloque
 
 
 def test_s9_resume_wiring():

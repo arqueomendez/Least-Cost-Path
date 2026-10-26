@@ -43,6 +43,69 @@ def test_phase1_npz_stores_cost_scalars(tmp_path):
     assert stored[5] == pytest.approx(costs[5])
 
 
+def test_phase1_npz_compression_policy(tmp_path):
+    """S2: compress_npz=False -> np.savez plano (ZIP_STORED, rapido, temporal);
+    True/ausente -> ZIP_DEFLATED (npz persistente chico para reanudar).
+    np.load lee ambos y la Fase 2 funciona sobre un npz plano."""
+    import zipfile
+
+    def run(compress_value):
+        p = tmp_path / f"r_{compress_value}.dat"
+        mm = np.memmap(p, dtype=np.float64, mode="w+", shape=SHAPE)
+        mm[:] = 1.0
+        mm.flush()
+        del mm
+        d = str(tmp_path / f"phase1_{compress_value}")
+        os.makedirs(d, exist_ok=True)
+        shared = {
+            "memmap_path": str(p),
+            "raster_dtype": np.float64,
+            "raster_shape": SHAPE,
+        }
+        if compress_value is not None:
+            shared["compress_npz"] = compress_value
+        pf.compute_and_save_cost_surface((1, (2, 2), {5: (10, 10)}, shared, d))
+        npz = os.path.join(d, "traceback_1.npz")
+        with zipfile.ZipFile(npz) as z:
+            tipos = {i.filename: i.compress_type for i in z.infolist()}
+        return npz, tipos, d
+
+    npz_plain, tipos_plain, d_plain = run(False)
+    npz_default, tipos_default, _ = run(None)  # clave ausente -> comportamiento actual
+    _npz_true, tipos_true, _ = run(True)
+
+    # politica de almacenamiento
+    assert all(t == zipfile.ZIP_STORED for t in tipos_plain.values()), tipos_plain
+    assert all(t == zipfile.ZIP_DEFLATED for t in tipos_default.values()), tipos_default
+    assert all(t == zipfile.ZIP_DEFLATED for t in tipos_true.values()), tipos_true
+
+    # ambos formatos cargan contenido identico
+    with np.load(npz_plain) as a, np.load(npz_default) as b:
+        assert np.array_equal(a["traceback"], b["traceback"])
+        assert np.array_equal(a["offsets"], b["offsets"])
+        assert np.array_equal(a["dest_ids"], b["dest_ids"])
+        assert np.array_equal(a["cost_scalars"], b["cost_scalars"])
+
+    # Fase 2 sobre npz PLANO (reanudacion sin comprimir)
+    with np.load(npz_plain) as data:
+        costs = {
+            int(d): float(c) for d, c in zip(data["dest_ids"], data["cost_scalars"])
+        }
+    oid, records = postp.reconstruct_routes_from_disk(
+        (
+            1,
+            _px_to_world((2, 2)),
+            [(5, _px_to_world((10, 10)))],
+            costs,
+            TRANSFORM,
+            d_plain,
+        )
+    )
+    assert oid == 1
+    assert len(records) == 1
+    assert records[0]["dest_id"] == 5
+
+
 def test_phase1_phase2_roundtrip(tmp_path):
     memmap_path = str(tmp_path / "raster.dat")
     mm = np.memmap(memmap_path, dtype=np.float64, mode="w+", shape=SHAPE)
