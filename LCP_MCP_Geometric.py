@@ -372,15 +372,14 @@ try:
         min_pos_val = np.min(cost_data[cost_data > 0]) if np.any(cost_data > 0) else 1e-9
         cost_data_log = np.where(cost_data <= 0, min_pos_val, cost_data)
 
-        # Cargar los puntos usando geopandas
-        points_gdf = gpd.read_file(ALL_POINTS_SHAPEFILE)
-
-        # Convertir las coordenadas geográficas de los puntos a coordenadas de píxel
+        # Graficar los nodos ya cargados y validados en la Celda 4 (dict id -> (x, y)).
+        # No se accede a la geometria cruda releida del archivo: una feature
+        # MultiPoint no expone .x/.y, y sus partes ya viven en el dict explotado.
         point_pixels_x = []
         point_pixels_y = []
-        for point in points_gdf.geometry:
+        for _px, _py in all_points_for_validation.values():
             # Usar rasterio.transform.rowcol para obtener fila y columna
-            row, col = rasterio.transform.rowcol(transform, point.x, point.y)
+            row, col = rasterio.transform.rowcol(transform, _px, _py)
             point_pixels_x.append(col)
             point_pixels_y.append(row)
 
@@ -860,8 +859,10 @@ try:
 
         final_routes_gdf.plot(ax=ax, edgecolor='red', linewidth=0.8,
                               label='Rutas Calculadas', alpha=0.6, zorder=3)
-        points_gdf.plot(ax=ax, color='yellow', markersize=50, ec='black',
-                        label='Nodos de la Red', zorder=5)
+        _node_xs = [xy[0] for xy in all_points_for_validation.values()]
+        _node_ys = [xy[1] for xy in all_points_for_validation.values()]
+        ax.scatter(_node_xs, _node_ys, color='yellow', s=50, edgecolor='black',
+                   label='Nodos de la Red', zorder=5)
 
         # Resaltar el origen en modo single_origin (S5; seleccion simple, no interactiva)
         if (

@@ -3,6 +3,46 @@
 import notebook_harness as nh
 
 
+def test_cells1_to_4_accept_multipoint_fixture(tmp_path):
+    """S4: validacion completa (celdas 1-4) con una capa MultiPoint.
+    load_points_as_dict la explota en ids derivados y la validacion de la
+    Celda 4 acepta todos los nodos resultantes."""
+    import fiona
+
+    raster = tmp_path / "cost.tif"
+    nh.write_synthetic_raster(raster)  # columnas >= 50 son nodata
+    mp = tmp_path / "mp.shp"
+    schema = {"geometry": "MultiPoint", "properties": {"id": "int"}}
+    with fiona.open(
+        mp, "w", driver="ESRI Shapefile", schema=schema, crs="EPSG:32719"
+    ) as dst:
+        dst.write(
+            {
+                "geometry": {
+                    "type": "MultiPoint",
+                    "coordinates": [(10.5, 89.5), (20.5, 79.5), (30.5, 69.5)],
+                },
+                "properties": {"id": 7},
+            }
+        )
+        dst.write(
+            {
+                "geometry": {
+                    "type": "MultiPoint",
+                    "coordinates": [(40.5, 89.5), (15.5, 89.5)],
+                },
+                "properties": {"id": 8},
+            }
+        )
+    srcs = nh.build_cells_1_to_4(tmp_path, raster=raster, points=mp, mask=None)
+    out, err = nh.run_code(srcs)
+    assert err is None, err
+    # explosion visible (S1) y validacion de los 5 nodos derivados (S4)
+    assert "MultiPoint explotadas" in out
+    assert "Se cargaron 5 puntos." in out
+    assert "Todos los datos son coherentes" in out
+
+
 def test_cells_1_to_4_pass_on_sample_data(tmp_path):
     # camino positivo con los datos reales del repo (solo OUTPUT_DIR a tmp
     # para no acumular sesiones en output/)

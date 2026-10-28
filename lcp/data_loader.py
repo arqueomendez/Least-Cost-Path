@@ -4,7 +4,7 @@ import os
 
 import fiona
 import rasterio
-from shapely.geometry import shape
+from shapely.geometry import MultiPoint, Point, shape
 from shapely.ops import unary_union
 
 
@@ -36,14 +36,60 @@ def load_raster(path):
     return rasterio.open(path)
 
 
+def _split_point_geometry(geom, point_id):
+    """
+    Returns the list of ((id, (x, y))) nodes produced by one geometry.
+
+    Point -> el propio id; MultiPoint de 1 parte -> el propio id; MultiPoint de
+    k >= 2 partes -> ids derivados ``point_id * 1000 + j`` (j = 1..k), en el
+    orden de la geometria. Solo se usan x, y (se ignora Z).
+    """
+    if isinstance(geom, Point):
+        return [(point_id, (geom.x, geom.y))]
+
+    if isinstance(geom, MultiPoint):
+        parts = list(geom.geoms)
+        if len(parts) <= 1:
+            if not parts:
+                raise ValueError(
+                    f"La geometria del id {point_id} es un MultiPoint vacio; "
+                    f"no aporta ningun nodo."
+                )
+            return [(point_id, (parts[0].x, parts[0].y))]
+        if len(parts) > 999:
+            raise ValueError(
+                f"La feature con id {point_id} tiene {len(parts)} partes en su "
+                f"MultiPoint; el maximo soportado es 999 (ids derivados "
+                f"original*1000+parte)."
+            )
+        return [
+            (point_id * 1000 + j, (part.x, part.y))
+            for j, part in enumerate(parts, start=1)
+        ]
+
+    geom_type = geom.geom_type if geom is not None else "None"
+    raise ValueError(
+        f"Geometria no soportada para el id {point_id}: '{geom_type}'. "
+        f"Solo se admiten geometrias Point y MultiPoint; convierte la capa "
+        f"antes de cargarla."
+    )
+
+
 def load_points_as_dict(shapefile_path, id_field):
     """
     Loads points from a shapefile or GPKG into a dict {id: (x, y)}.
     Falls back to using the feature's fid when id_field is absent from properties.
     Compatible con fiona 1.9+ (acceso por atributo en lugar de dict-style).
+
+    MultiPoint: una feature con k >= 2 coordenadas se explota en k nodos con
+    ids derivados ``id_original * 1000 + j`` (j = 1..k, k <= 999).
     """
     points = {}
     duplicated = []
+    collisions = []
+    derived_ids = set()
+    exploded_features = 0
+    exploded_nodes = 0
     crs = None
     print(f"Cargando puntos desde: {os.path.basename(shapefile_path)}")
     if not os.path.exists(shapefile_path):
@@ -89,14 +135,46 @@ def load_points_as_dict(shapefile_path, id_field):
 
             # shape() normaliza Geometry de fiona 1.9 o dict-geojson antiguo.
             geom = shape(_get_geometry(feature))
-            if point_id in points and point_id not in duplicated:
-                duplicated.append(point_id)
-            points[point_id] = (geom.x, geom.y)
+            nodes = _split_point_geometry(geom, point_id)
+            is_explosion = len(nodes) > 1
+            if is_explosion:
+                exploded_features += 1
+                exploded_nodes += len(nodes)
+
+            for node_id, coords in nodes:
+                if node_id in points:
+                    # Un id derivado nunca puede repetirse: rompe la unicidad
+                    # exigida por npz (dest_ids int64), el GPKG y `did > origin_id`.
+                    if is_explosion or node_id in derived_ids:
+                        if node_id not in collisions:
+                            collisions.append(node_id)
+                        continue
+                    if node_id not in duplicated:
+                        duplicated.append(node_id)
+                    continue
+                points[node_id] = coords
+                if is_explosion:
+                    derived_ids.add(node_id)
 
         if duplicated:
             raise ValueError(
                 f"IDs duplicados en '{os.path.basename(shapefile_path)}': "
                 f"{sorted(duplicated)}. Cada punto debe tener un ID unico."
+            )
+
+        if collisions:
+            raise ValueError(
+                f"Colision de IDs derivados en "
+                f"'{os.path.basename(shapefile_path)}': {sorted(collisions)}. "
+                f"Los ids derivados (original*1000+parte) deben ser unicos: "
+                f"renombra los ids originales que colisionen."
+            )
+
+        if exploded_features:
+            print(
+                f"  ADVERTENCIA: {exploded_features} feature(s) MultiPoint explotadas "
+                f"en {exploded_nodes} puntos "
+                f"(ids derivados = original*1000+parte)"
             )
 
     print(f"Se cargaron {len(points)} puntos.")
