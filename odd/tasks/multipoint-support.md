@@ -1,7 +1,7 @@
 # Feature: multipoint-support
 
 Objetivo: soporte para capas de puntos con geometrías **MultiPoint** (hoy crashean con `AttributeError: 'MultiPoint' object has no attribute 'x'` en la carga de la Celda 4 y en el acceso `.x` de la Celda 5), con la semántica elegida por el usuario: **explosión con IDs derivados**.
-Branch: `feature/multipoint-support` (apilada sobre `LCP_MCP_Geometric`). Entrega: commits locales; push solo si el usuario lo pide.
+Branch: **`LCP_MCP_Geometric`** — corrección (L6): al igual que en perf-fast-io, **no se creó** la rama `feature/multipoint-support` (el checkout se omitió): los commits de este feature (y del fix de ipywidgets) cayeron directamente en la rama principal.
 Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `uv run ruff format --check .`; verificación funcional con harness/corrida.
 
 ## Specs
@@ -25,3 +25,4 @@ Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `u
 - **L3** (fallo reproducido, evidencia): fixture MultiPoint con `load_points_as_dict` → `AttributeError: 'MultiPoint' object has no attribute 'x'`; mismo error en el acceso `.x` de la Celda 5.
 - **L4** (worker `gentle-ai-worker`, task mvseiu2s-1-e40x): T1 completo con RED 8 → GREEN 9 y validación diferencial (stdout/dict/CRS/excepciones idénticos a la base en `data/points.shp`); 86 passed; export regenerado; riesgos anotados (precondición de Celda 5 = Celda 4 corridas en orden; `points_gdf` en Celda 7 conserva solo lectura/CRS — código benigno).
 - **L5** (T2, verificación del padre): spot-check del helper OK (regla exacta, límites, mensajes); harness multipoint `1 passed` (celdas 1–4 con fixture: resumen de explosión + 5 puntos + coherencia); batería **87 passed**; corrida muestra **exit 0, 91/91, 0 errores** y los 3 PNG generados (C5/C7 con el nuevo dibujo desde el dict). Commit `42983f5`.
+- **L6** (push del usuario, verbatim: "realiza el push") + corrección de atribución: los 5 commits pendientes (`4680438` edición de voseo del usuario, `849f2d0` pasada neutra, `42983f5` multipoint, `fd893ba` docs, `be5779e` fix de ipywidgets) estaban en `LCP_MCP_Geometric` (la rama `feature/multipoint-support` nunca existió) y se subieron a origin desde ahí; verificado remoto == local.
