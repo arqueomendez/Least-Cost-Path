@@ -136,6 +136,7 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 - `fiona`
 - `geopandas`
 - `jupyterlab`
+- `ipywidgets`
 - `matplotlib-scalebar`
 - `numba`
 - `numpy`

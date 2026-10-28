@@ -81,8 +81,7 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   (coste, longitud, vértices — orden-agnóstico), 82 288 puntos con
   distribución idéntica (`sorted(bincount)` sha256 igual), campos iguales,
   0 errores; 74 tests + ruff verdes.
-- *Conocido*: `TqdmWarning: IProgress not found` cosmético en kernels sin
-  ipywidgets; la Celda 7 materializa todas las rutas para graficar (límite
+- *Conocido → **resuelto***: el `TqdmWarning: IProgress not found` se corrigió añadiendo **`ipywidgets` como dependencia del proyecto** (8.1.9 + jupyterlab-widgets 3.0.17): verificado con probe y corrida completa (0 warnings, **2 salidas widget** — las barras de las fases renderizan como widgets reales). *Conocido*: la Celda 7 materializa todas las rutas para graficar (límite
   documentado en README para N muy grandes).
 
 ### perf-fast-io (rendimiento de E/S)

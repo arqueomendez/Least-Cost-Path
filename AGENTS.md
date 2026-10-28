@@ -363,9 +363,10 @@ Worker: `lcp.postprocessing.reconstruct_routes_from_disk(args)`
   la Celda 6 **nunca acumula las rutas en RAM** y el GPKG final nunca queda
   parcial. El orden de filas del GPKG = orden de finalización de los orígenes.
 - Progreso de ambas fases con `tqdm.auto` (joblib `verbose=0`); con
-  `disable=None` las salidas headless quedan limpias. Aviso cosmético posible
-  en kernels sin ipywidgets: `TqdmWarning: IProgress not found` (la barra cae
-  a texto y sigue funcionando).
+  `disable=None` las salidas headless quedan limpias. `ipywidgets` es
+  **dependencia del proyecto** (8.1.9 + jupyterlab-widgets 3.0.17): en JupyterLab
+  las barras usan widgets reales y sin `TqdmWarning`; si el entorno lo
+  perdiera, tqdm cae a texto con el aviso `IProgress not found`.
 
 ### Auto-detección de workers
 

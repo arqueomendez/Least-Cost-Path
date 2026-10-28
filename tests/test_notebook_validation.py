@@ -43,6 +43,20 @@ def test_cells1_to_4_accept_multipoint_fixture(tmp_path):
     assert "Todos los datos son coherentes" in out
 
 
+def test_tqdm_auto_has_widgets_no_warning():
+    """Instalacion de ipywidgets: tqdm.auto en kernel no emite TqdmWarning/
+    IProgress (la barra usa widgets reales; antes fallaba por modulo ausente)."""
+    out, err = nh.run_code(
+        [
+            "from tqdm.auto import tqdm",
+            "for _ in tqdm(range(2), desc='probe'): pass",
+        ]
+    )
+    assert err is None, err
+    assert "IProgress" not in out
+    assert "TqdmWarning" not in out
+
+
 def test_cells_1_to_4_pass_on_sample_data(tmp_path):
     # camino positivo con los datos reales del repo (solo OUTPUT_DIR a tmp
     # para no acumular sesiones en output/)
