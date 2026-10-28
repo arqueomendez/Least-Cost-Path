@@ -136,6 +136,8 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origi
 Una **celda markdown en español** justo antes de la Celda 3 documenta ambos modos
 dentro del notebook (tabla comparativa, cuándo usar cada uno, CLI y salidas).
 
+**OOM en Fase 1 (datos grandes)**: si aparece `ArrayMemoryError: Unable to allocate … _offset_edge_map`, cada worker necesita un bloque **contiguo** de ~2× el ráster (2,74 GB para 14 355 × 11 945) además de sus buffers — con la RAM comprometida por otras aplicaciones la asignación falla aunque parezca que sobra memoria. Remedio: baja `MAX_WORKERS_PHASE1` en la Celda 3 (p. ej. `4`) y re-ejecuta; con `RESUME=True` los `.npz` sanos se reutilizan y solo se recalculan los orígenes fallidos.
+
 Para retomar resultados ya calculados sin reejecutar el pipeline completo, corre
 solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
 `OUTPUT_DIR` no apunta a una sesión válida (la Celda 9 busca el archivo

@@ -116,3 +116,15 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
 - Verificación: RED 8 → GREEN 9 (tests multipoint), harness de celdas 1–4 con
   fixture MultiPoint (`Se cargaron 5 puntos`), suite **87 passed**, corrida de
   muestra 91/91 con 0 errores y los 3 PNG (C5/C7 desde el dict).
+
+### control de workers de Fase 1 (OOM verificado en dos máquinas)
+
+- **`MAX_WORKERS_PHASE1`** (Celda 3, default `None` = automático): tope manual
+  de workers de la Fase 1. Motivo: con el ráster real (14 355 × 11 945 ≈ 171 Mpx,
+  float64 = 1,37 GB) cada worker necesita además un bloque **contiguo** de
+  2,74 GB (`_offset_edge_map` de skimage, (2,H,W) int64) — con la RAM
+  comprometida por otras aplicaciones la asignación falla con
+  `ArrayMemoryError: Unable to allocate 2.56 GiB` (reproducido en esta máquina
+  con 6 workers y en el equipo remoto de 128 GB). Remedio: limitar a 4–6
+  workers; con `RESUME=True` la re-ejecución reutiliza los `.npz` sanos y solo
+  recalcula los orígenes fallidos.

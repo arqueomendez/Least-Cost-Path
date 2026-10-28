@@ -102,6 +102,7 @@ Parámetros editables por el usuario:
 | `VERBOSE`              | `True` imprime detalles por ruta; `False` suprime el ruido                  |
 | `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
 | `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
+| `MAX_WORKERS_PHASE1`   | `None` = automático; entero (p. ej. `4`) para limitar los workers de Fase 1 si topa con `ArrayMemoryError` en rams compartidas |
 
 ### Celda 4 — Verificación de coherencia de datos
 Valida CRS idénticos (ráster/puntos/máscara), solape espacial y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o `nodata` — los IDs problemáticos se listan). En modo `single_origin` comprueba además que el modo sea válido, que haya ≥ 2 puntos y que `ORIGIN_ID` exista. Cualquier problema **detiene la ejecución** con un mensaje concreto antes de calcular nada.

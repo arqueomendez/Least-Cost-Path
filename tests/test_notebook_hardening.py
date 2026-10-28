@@ -78,3 +78,14 @@ def test_s8_export_has_no_drift_markers():
     assert "HEATMAP_BANDWIDTH_M = 1000" in py
     assert "_PUNTOS_NAME" in py
     assert "pipeline_ok" in py
+
+
+def test_max_workers_phase1_override():
+    # S-extra: parametro MAX_WORKERS_PHASE1 en la Celda 3 y aplicado en la
+    # Celda 6 (remedio explicito para OOM de Fase 1 en rams compartidas,
+    # verificado en dos maquinas con el raster de 171 Mpx).
+    assert "MAX_WORKERS_PHASE1" in SRC[2]
+    s = SRC[5]
+    assert "MAX_WORKERS_PHASE1" in s
+    i = s.index("MAX_WORKERS_PHASE1")
+    assert "min(n_jobs_p1" in s[i : i + 400]

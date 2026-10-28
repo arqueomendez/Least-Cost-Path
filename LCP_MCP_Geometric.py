@@ -178,6 +178,8 @@ ID_FIELD_NAME = 'id'
 ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
 RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
+MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
+                                # workers de Fase 1 si topa con ArrayMemoryError en rams compartidas
 
 # --- 3. Opciones de Almacenamiento ---
 KEEP_PHASE1_FILES = False
@@ -564,6 +566,9 @@ try:
             tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
 
     n_jobs_p1 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=1)
+    if MAX_WORKERS_PHASE1:
+        n_jobs_p1 = min(n_jobs_p1, int(MAX_WORKERS_PHASE1))
+        print(f"  MAX_WORKERS_PHASE1 aplicado: {n_jobs_p1} workers")
     modo_desc = (
         f"single_origin (origen {ORIGIN_ID})"
         if ANALYSIS_MODE == "single_origin"
