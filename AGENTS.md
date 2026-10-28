@@ -155,7 +155,7 @@ del notebook automáticamente. La evidencia de cada corrida vive en los
 
 | Archivo | Responsabilidad |
 |---|---|
-| `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`); valida IDs duplicados de puntos. |
+| `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`); valida IDs duplicados de puntos y explota `MultiPoint` (ids derivados `id*1000+j`). |
 | `processing.py` | Conversión mundo↔píxel, creación de máscaras raster desde vectores, corredor de búsqueda. |
 | `pathfinder.py` | Motor MCP (`MCP_Geometric`), reconstrucción de traceback con Numba `@njit`, y `compute_and_save_cost_surface()` (worker Fase 1: calcula superficie de coste y guarda traceback comprimido en `.npz`). |
 | `postprocessing.py` | Extrae todas las rutas desde un origen dado (`extract_routes`); aplica deduplicación `dest_id > origin_id`; y `reconstruct_routes_from_disk()` (worker Fase 2: carga traceback desde `.npz` y reconstruye rutas). |
@@ -284,6 +284,7 @@ Las funciones públicas que pueden ser ruidosas aceptan un parámetro `verbose=F
   construir el objeto MCP.
 - El CRS del vector de puntos y el CRS del raster deben coincidir; la herramienta
   no reprojecta automáticamente.
+- Los puntos pueden ser `Point` o `MultiPoint`: cada MultiPoint de k > 1 coordenadas se explota en k nodos con ids derivados `id*1000+j` (j = 1..k, orden del archivo); colisión de ids derivados, MultiPoint vacío o geometría no puntual → `ValueError`.
 
 ---
 

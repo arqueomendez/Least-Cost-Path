@@ -103,3 +103,17 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   `sorted(bincount)` idéntico, 0 errores. Evaluación completa con benchmarks:
   `odd/tasks/perf-fast-io.md`. Sin cambios en FFT (Celda 9), Fase 2/densify
   ni overhead de imports (decisiones explícitas).
+
+### multipoint-support
+
+- **Capas MultiPoint en los puntos**: `Point` y MultiPoint de 1 parte
+  conservan el id; un MultiPoint de **k ≥ 2 coordenadas se explota en k
+  nodos** con ids derivados `id*1000+j` (j = 1..k, orden del archivo, solo
+  x/y) con una única línea de resumen. Colisiones de ids derivados y
+  geometrías no puntuales → `ValueError` (los ids siguen siendo enteros
+  únicos: lo exigen npz/GPKG y `did > origin_id`).
+- Las Celdas 5 y 7 grafican desde el diccionario ya cargado — fin del
+  `AttributeError: 'MultiPoint' object has no attribute 'x'`.
+- Verificación: RED 8 → GREEN 9 (tests multipoint), harness de celdas 1–4 con
+  fixture MultiPoint (`Se cargaron 5 puntos`), suite **87 passed**, corrida de
+  muestra 91/91 con 0 errores y los 3 PNG (C5/C7 desde el dict).

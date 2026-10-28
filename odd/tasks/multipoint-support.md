@@ -14,12 +14,14 @@ Runner (tras cada tarea): `uv run pytest tests/ -q` + `uv run ruff check .` + `u
 
 ## Tasks
 
-- T1 — S1,S3 — pending — inline/delegado — Implementación data_loader + celdas 5/7 + tests RED→GREEN
-- T2 — S4 — pending — inline — Verificación funcional (harness multipoint + corrida muestra + batería)
-- T3 — S5 — pending — inline — Docs (README/AGENTS/CHANGELOG) + cierre (doc, espejo, memoria, commits)
+- T1 — S1,S3 — done — worker `mvseiu2s-1-e40x` (spot-check del padre OK): `_split_point_geometry` (regla `orig*1000+j`, k≤999, vacío/no-puntual → `ValueError`, colisiones listadas, resumen único), celdas 5/7 desde el dict. **RED 8 failed → GREEN 9**, chequeo diferencial vs base idéntico en `data/points.shp`, 86 passed totales.
+- T2 — S4 — done — `42983f5` — Harness multipoint GREEN (`Se cargaron 5 puntos` + coherencia), batería propia **87 passed**, ruff/format verdes, corrida muestra **exit 0, 91/91, 0 errores** con los 3 PNG (C5/C7 desde el dict).
+- T3 — S5 — in_progress — Docs (README/AGENTS/CHANGELOG) + cierre (espejo, memoria) — commit de cierre.
 
 ## Log
 
 - **L1** (petición del usuario, verbatim): "Necesito que se añada soporte para multipoints"
 - **L2** (decisión del usuario, verbatim — questionnaire): "Explosión con IDs derivados" — cuando una feature MultiPoint trae varias coordenadas para el mismo id, cada coordenada se vuelve un nodo real con id derivado (fue la opción marcada como la más invasiva: N crece y la trazabilidad de ids cambia).
 - **L3** (fallo reproducido, evidencia): fixture MultiPoint con `load_points_as_dict` → `AttributeError: 'MultiPoint' object has no attribute 'x'`; mismo error en el acceso `.x` de la Celda 5.
+- **L4** (worker `gentle-ai-worker`, task mvseiu2s-1-e40x): T1 completo con RED 8 → GREEN 9 y validación diferencial (stdout/dict/CRS/excepciones idénticos a la base en `data/points.shp`); 86 passed; export regenerado; riesgos anotados (precondición de Celda 5 = Celda 4 corridas en orden; `points_gdf` en Celda 7 conserva solo lectura/CRS — código benigno).
+- **L5** (T2, verificación del padre): spot-check del helper OK (regla exacta, límites, mensajes); harness multipoint `1 passed` (celdas 1–4 con fixture: resumen de explosión + 5 puntos + coherencia); batería **87 passed**; corrida muestra **exit 0, 91/91, 0 errores** y los 3 PNG generados (C5/C7 con el nuevo dibujo desde el dict). Commit `42983f5`.
