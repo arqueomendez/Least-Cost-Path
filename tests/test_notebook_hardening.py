@@ -87,8 +87,8 @@ def test_max_workers_phase1_override():
     assert "MAX_WORKERS_PHASE1" in SRC[2]
     s = SRC[5]
     assert "MAX_WORKERS_PHASE1" in s
-    i = s.index("MAX_WORKERS_PHASE1")
-    assert "min(n_jobs_p1" in s[i : i + 400]
+    # el recorte se aplica siempre, despues del aviso si el pedido excede el limite
+    assert "n_jobs_p1 = min(n_jobs_p1, _pedido)" in s
 
 
 def test_mask_is_always_strict_in_the_notebook():
@@ -117,3 +117,24 @@ def test_edge_buffer_param_wired():
     assert "EDGE_BUFFER_PX" in s4
     i = s4.index("EDGE_BUFFER_PX")
     assert "main_search_mask" in s4[i : i + 900]
+
+
+def test_worker_count_uses_the_measured_memory_model():
+    # El estimador viejo (raster x 4.5) subestimaba x2 en rasters grandes y fue la
+    # causa del ArrayMemoryError en _offset_edge_map. La sugerencia sale ahora del
+    # modelo medido en lcp/resources.py.
+    s2 = SRC[1]
+    assert "lcp.resources" in s2
+    assert "suggest_n_jobs" in s2
+    # el factor viejo (raster x 4.5) ya no se usa en el codigo (el texto puede
+    # mencionarlo para explicar el error historico)
+    assert "raster_bytes * 4.5" not in s2
+    s6 = SRC[5]
+    # la cantidad real de tareas acota la sugerencia
+    assert "n_tasks=len(tasks_p1)" in s6
+
+
+def test_worker_override_warns_instead_of_silently_capping():
+    # MAX_WORKERS_PHASE1 no puede superar el limite seguro sin avisar
+    s6 = SRC[5]
+    assert "excede el limite seguro" in s6 or "excede el límite seguro" in s6

@@ -171,6 +171,31 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   usa el default) + 8 pruebas de caracterización del parámetro; suite **109
   passed**, `ruff` limpio.
 
+### modelo de memoria por worker medido y sugerencia de workers
+
+- **Problema**: el estimador de workers de la Celda 2 usaba `raster_bytes × 4.5`
+  para la Fase 1 y 80 MB fijos para la Fase 2. En el ráster real (14 355 × 11 945
+  = 171,5 Mpx) predecía 6,2 GB por worker cuando el pico medido es **12,2 GB**, y
+  con 6 workers el consumó real era 73 GB frente a 54 GB disponibles: de ahí el
+  `ArrayMemoryError: Unable to allocate 2.56 GiB … _offset_edge_map`.
+- **Causa**: el pico no lo domina el ráster sino las estructuras de
+  `MCP_Geometric` — mapa de offsets `(2, H, W)` int64 (16 B/px, además **contiguo**),
+  costes acumulados float64 (8 B/px) y traceback int16 (2 B/px).
+- **Medición** (pico RSS de un proceso que solo ejecuta un MCP, `fully_connected=True`):
+  83,9 B/px en 4 Mpx, 76,9 en 36 Mpx y 76,2 en 171,5 Mpx → se adopta
+  **76 B/px + 30 MB** por worker; la Fase 2 mide **2 B/px** (solo carga el traceback).
+- **`lcp/resources.py`**: `phase_peak_bytes`, `suggest_n_jobs`, `advice_for_phase`,
+  `detect_hardware`, `disk_bytes_for_phase1` y `format_hardware`. La sugerencia es
+  `min(RAM_disponible × 0,8 / pico, núcleos físicos [Fase 1] o 2 × lógicos [Fase 2],
+  tareas)`, con mínimo 1.
+- **Cableado**: la Celda 2 imprime hardware, pico por worker y sugerencia, y acepta
+  `n_tasks`; la Celda 6 le pasa el número real de tareas y, si `MAX_WORKERS_PHASE1`
+  excede el límite seguro, avisa con los GB implicados y recorta.
+- **Verificación**: 17 pruebas nuevas en `tests/test_resources.py` (pines de las tres
+  mediciones y de la sugerencia, con chequeo de mutación: con la constante vieja
+  fallan 7), 5 pines reescritos en `tests/test_quality_backlog.py` al seam nuevo y
+  el caso real pinneado (171,5 Mpx + 40 GB → 2 workers); suite **129 passed**.
+
 ### control de workers de Fase 1 (OOM verificado en dos máquinas)
 - **`MAX_WORKERS_PHASE1`** (Celda 3, default `None` = automático): tope manual
   de workers de la Fase 1. Motivo: con el ráster real (14 355 × 11 945 ≈ 171 Mpx,

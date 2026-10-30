@@ -136,7 +136,19 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origi
 Una **celda markdown en español** justo antes de la Celda 3 documenta ambos modos
 dentro del notebook (tabla comparativa, cuándo usar cada uno, CLI y salidas).
 
-**OOM en Fase 1 (datos grandes)**: si aparece `ArrayMemoryError: Unable to allocate … _offset_edge_map`, cada worker necesita un bloque **contiguo** de ~2× el ráster (2,74 GB para 14 355 × 11 945) además de sus buffers — con la RAM comprometida por otras aplicaciones la asignación falla aunque parezca que sobra memoria. Remedio: baja `MAX_WORKERS_PHASE1` en la Celda 3 (p. ej. `4`) y re-ejecuta; con `RESUME=True` los `.npz` sanos se reutilizan y solo se recalculan los orígenes fallidos.
+**Memoria por worker y sugerencia de workers**: la Celda 2 detecta el hardware
+(RAM disponible, núcleos físicos/lógicos, disco libre) e imprime el pico
+estimado por worker y los workers sugeridos, usando el modelo **medido** de
+`lcp/resources.py`: **76 B por píxel y worker** en Fase 1 (+30 MB fijos) y
+**2 B por píxel** en Fase 2. En el ráster de 171,5 Mpx eso son 12,2 GB por
+worker: con 40 GB disponibles la sugerencia es 2 y con 54 GB es 3. Un estimador
+del tipo «ráster × 4,5» predice la mitad y provoca
+`ArrayMemoryError: Unable to allocate … _offset_edge_map` (el mapa de offsets de
+skimage necesita además un bloque **contiguo** de 2·H·W·8 bytes por worker).
+`MAX_WORKERS_PHASE1` actúa como tope: si el valor pedido excede el límite seguro,
+la Celda 6 lo avisa, imprime el pico que implicaría y usa el valor seguro. Con
+`RESUME=True` la re-ejecución reutiliza los `.npz` sanos y solo recalcula los
+orígenes fallidos.
 
 **Rutas pegadas al borde del polígono (corredor de bajo coste)**: la máscara
 del área de estudio es **siempre estricta** (solo píxeles cuyo centro cae dentro

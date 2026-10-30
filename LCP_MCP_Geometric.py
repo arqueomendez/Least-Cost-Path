@@ -52,37 +52,39 @@ print("Módulos cargados exitosamente.")
 # --- CELDA 2: DEFINICIÓN DE FUNCIONES ---
 # ==============================================================================
 
-def _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase):
+def _calculate_n_jobs_for_phase(
+    raster_shape, raster_dtype, phase, n_tasks=None, verbose=True
+):
     """
-    Estima cuántos workers paralelos caben en la RAM disponible para cada fase.
-    (El traceback de skimage mide int16 (2 B/celda); las estimaciones son conservadoras.)
+    Workers que caben en la RAM disponible, segun el modelo MEDIDO en
+    `lcp/resources.py`. Imprime el inventario de hardware y la sugerencia.
+
+    El pico por worker no lo domina el raster sino las estructuras de
+    `MCP_Geometric`: mapa de offsets (2, H, W) int64 + costes f64 + traceback
+    i16. Medido: 76 B por pixel en Fase 1 y 2 B por pixel en Fase 2, mas
+    ~30 MB fijos. El estimador anterior (raster x 4.5) subestimaba x2 en
+    rasters grandes y provocaba ArrayMemoryError en `_offset_edge_map`.
     """
-    import psutil
-    import numpy as np
     import sys
 
-    available_ram = psutil.virtual_memory().available
-    raster_bytes = np.prod(raster_shape) * np.dtype(raster_dtype).itemsize
+    import lcp.resources as res
 
-    if phase == 1:
-        # costes planos (f64) + heap + offsets + traceback (i16); SIN copia
-        # del raster: el worker usa la vista del memmap (S3 perf).
-        mem_per_worker = raster_bytes * 4.5
-        n_jobs = max(1, int(available_ram * 0.80 / mem_per_worker))
-        n_cpu = psutil.cpu_count(logical=True) or 1
-        n_jobs = min(n_jobs, n_cpu)
-    else:
-        # Fase 2: traceback comprimido en disco -> mucho menos RAM.
-        mem_per_worker = 80 * 1024 * 1024
-        n_jobs = max(1, int(available_ram * 0.80 / mem_per_worker))
-        n_cpu = psutil.cpu_count(logical=True) or 1
-        n_jobs = min(n_jobs, n_cpu * 2)
-
-    if sys.platform == "win32":
-        n_jobs = min(n_jobs, 61)   # límite de WaitForMultipleObjects en Windows
-
+    if n_tasks is None:
+        n_tasks = 10**6  # sin limite de tareas: manda la RAM y la CPU
+    hw = res.detect_hardware(OUTPUT_DIR if 'OUTPUT_DIR' in globals() else None)
+    _cpu = hw['cpu_fisicos'] if phase == 1 else 2 * hw['cpu_logicos']
+    n_jobs = res.suggest_n_jobs(
+        phase, raster_shape, n_tasks, hw['ram_disponible'], cpu_count=_cpu
+    )
+    if sys.platform == 'win32':
+        n_jobs = min(n_jobs, 61)  # limite de WaitForMultipleObjects en Windows
+    if verbose:
+        print(res.format_hardware(hw))
+        for linea in res.advice_for_phase(
+            phase, raster_shape, n_tasks, hardware=hw
+        )['lineas']:
+            print(linea)
     return n_jobs
-
 
 def warm_up_numba():
     """
@@ -635,9 +637,23 @@ try:
                 continue
             tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
 
-    n_jobs_p1 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=1)
+    n_jobs_p1 = _calculate_n_jobs_for_phase(
+        raster_shape, raster_dtype, phase=1, n_tasks=len(tasks_p1)
+    )
     if MAX_WORKERS_PHASE1:
-        n_jobs_p1 = min(n_jobs_p1, int(MAX_WORKERS_PHASE1))
+        _pedido = int(MAX_WORKERS_PHASE1)
+        if _pedido > n_jobs_p1:
+            import lcp.resources as _res
+
+            _pico_gb = _res.phase_peak_bytes(1, raster_shape) * _pedido / 2**30
+            print(
+                f"  AVISO: MAX_WORKERS_PHASE1={_pedido} excede el limite seguro "
+                f"para la RAM disponible ({n_jobs_p1}); se usaran {n_jobs_p1}."
+            )
+            print(
+                f"  Con {_pedido} workers el pico seria ~{_pico_gb:.1f} GB."
+            )
+        n_jobs_p1 = min(n_jobs_p1, _pedido)
         print(f"  MAX_WORKERS_PHASE1 aplicado: {n_jobs_p1} workers")
     modo_desc = (
         f"single_origin (origen {ORIGIN_ID})"
@@ -724,7 +740,9 @@ try:
         )
 
     # --- PASO 4: FASE 2 (streaming: cada lote se escribe, sin acumular en RAM) ---
-    n_jobs_p2 = _calculate_n_jobs_for_phase(raster_shape, raster_dtype, phase=2)
+    n_jobs_p2 = _calculate_n_jobs_for_phase(
+        raster_shape, raster_dtype, phase=2, n_tasks=len(tasks_p2)
+    )
     print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
     for origin_id, origin_coords in all_points.items():

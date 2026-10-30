@@ -102,7 +102,7 @@ Parámetros editables por el usuario:
 | `VERBOSE`              | `True` imprime detalles por ruta; `False` suprime el ruido                  |
 | `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
 | `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
-| `MAX_WORKERS_PHASE1`   | `None` = automático; entero (p. ej. `4`) para limitar los workers de Fase 1 si topa con `ArrayMemoryError` en rams compartidas |
+| `MAX_WORKERS_PHASE1`   | `None` = automático. La Celda 2 detecta el hardware (RAM disponible, núcleos físicos/lógicos, disco) y **sugiere** los workers con el modelo de memoria medido; un entero actúa como tope y, si excede lo que permite la RAM, se avisa y se recorta |
 | `EDGE_BUFFER_PX`       | `0` = no excluye nada. `N` excluye las `N` filas/columnas exteriores del ráster: corta el corredor perimetral cuando el modelo de coste es poco fiable en los límites (la máscara del polígono es siempre **estricta**, no configurable) |
 
 ### Celda 4 — Verificación de coherencia de datos
@@ -455,6 +455,15 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 - **CRS en visualización**: Celda 6 captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
 - **Datashader**: Instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
 - **Escalabilidad (N grande)**: la Fase 2 y el densificado de la Celda 8 se escriben de forma **incremental** — la memoria solo sostiene un lote/origen o un chunk, nunca todos los registros (antes: todos los `LineString` en RAM + concatenación global de ~1,6 GB a 81M puntos). Ambas fases muestran progreso con `tqdm`. El orden de filas de los GPKG es el orden de finalización; `route_idx` da la trazabilidad por ruta. *Límite conocido*: la Celda 7 (mapa final) materializa todas las rutas para graficar — con N muy grande usa el PNG ya guardado o evita esa celda.
+- **Memoria por worker (modelo medido)**: el pico de la Fase 1 no lo domina el
+  ráster sino las estructuras de `skimage.graph.MCP_Geometric` (mapa de offsets
+  `(2, H, W)` int64 + costes float64 + traceback int16). Medido con `fully_connected=True`:
+  **76 B por píxel y worker** más ~30 MB fijos (12,2 GB por worker en el ráster de
+  171,5 Mpx). La Fase 2 cuesta **2 B por píxel** (solo carga el traceback).
+  `lcp/resources.py` implementa el modelo y la sugerencia; un factor del tipo
+  «ráster × 4,5» subestima ×2 en rásteres grandes y es la causa del
+  `ArrayMemoryError` en `_offset_edge_map`. Disco de Fase 1: `orígenes × H × W × 2`
+  bytes (~19 GB con 60 orígenes en ese ráster).
 - **Rendimiento (E/S)**: con `KEEP_PHASE1_FILES=False` (lo normal) los `.npz` de Fase 1 se guardan **planos** (~29 s de zlib por origen ahorrados en rasters grandes); el worker usa la **vista del memmap** sin copiar el ráster (+~20–25% de workers por la menor RAM); los puntos se escriben con **pyogrio** (2,9× vs el bucle de fiona). La evaluación completa con benchmarks está en `odd/tasks/perf-fast-io.md`.
 
 ## Licencia y atribución

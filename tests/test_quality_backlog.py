@@ -6,10 +6,10 @@ cuando se implementen.
 
 import ast
 import sys
-from types import SimpleNamespace
 
 import nbformat
-import psutil
+
+import lcp.resources as res
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
 NB = nbformat.read(ROOT / "LCP_MCP_Geometric.ipynb", as_version=4)
@@ -28,49 +28,66 @@ def _n_jobs_fn():
     return ns["_calculate_n_jobs_for_phase"]
 
 
-def _stub(monkeypatch, available, cpu):
-    monkeypatch.setattr(
-        psutil, "virtual_memory", lambda: SimpleNamespace(available=available)
-    )
-    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: cpu)
+def _stub(monkeypatch, available, cpu_fisicos=8, cpu_logicos=None):
+    """Inyecta el hardware en el seam nuevo: lcp.resources.detect_hardware."""
+    hw = {
+        "ram_total": max(available, 1),
+        "ram_disponible": available,
+        "cpu_fisicos": cpu_fisicos,
+        "cpu_logicos": cpu_logicos or cpu_fisicos * 2,
+        "disco_libre": 10**12,
+    }
+    monkeypatch.setattr(res, "detect_hardware", lambda *a, **k: dict(hw))
 
 
 def test_n_jobs_phase1_limited_by_cpu(monkeypatch):
     fn = _n_jobs_fn()
-    _stub(monkeypatch, 8 * 1024**3, 16)
-    # 8 GB: el presupuesto por worker (raster 8 MB x 5.5) no limita -> manda la CPU
-    assert fn((1000, 1000), "float64", 1) == 16
+    # raster chico: la RAM no limita, manda el tope de nucleos FISICOS
+    _stub(monkeypatch, 64 * 1024**3, cpu_fisicos=16)
+    assert fn((1000, 1000), "float64", 1, verbose=False) == 16
 
 
 def test_n_jobs_min_one_on_low_ram(monkeypatch):
     fn = _n_jobs_fn()
-    _stub(monkeypatch, 10 * 1024**2, 16)
-    # 10 MB disponibles: int(0.8*10MB/44MB) = 0 -> debe quedar 1 worker
-    assert fn((1000, 1000), "float64", 1) == 1
+    # 10 MB disponibles y worker de ~0,1 GB: no entra ninguno -> 1, nunca 0
+    _stub(monkeypatch, 10 * 1024**2, cpu_fisicos=16)
+    assert fn((1000, 1000), "float64", 1, verbose=False) == 1
 
 
 def test_n_jobs_windows_cap_61(monkeypatch):
     fn = _n_jobs_fn()
-    _stub(monkeypatch, 64 * 1024**3, 100)
+    _stub(monkeypatch, 512 * 1024**3, cpu_fisicos=100)
     monkeypatch.setattr(sys, "platform", "win32")
     # limite de WaitForMultipleObjects en Windows
-    assert fn((1000, 1000), "float64", 1) == 61
+    assert fn((1000, 1000), "float64", 1, verbose=False) == 61
 
 
-def test_n_jobs_phase2_uses_80mb_budget(monkeypatch):
+def test_n_jobs_phase2_uses_the_traceback_model(monkeypatch):
     fn = _n_jobs_fn()
-    _stub(monkeypatch, 8 * 1024**3, 16)
-    # 80 MB por worker: int(0.8*8GB/80MB)=81 -> limitado a cpu*2 = 32
-    assert fn((1000, 1000), "float64", 2) == 32
+    # Fase 2: 2 B/px + 30 MB por worker (0,03 GB en un raster de 1 Mpx), asi que
+    # con 8 GB la RAM admite 205 workers y el limite pasa a ser la CPU
+    # (2 x nucleos logicos = 2 x 32 = 64)
+    _stub(monkeypatch, 8 * 1024**3, cpu_fisicos=16)
+    esperado = 61 if sys.platform == "win32" else 64  # tope de Windows
+    assert fn((1000, 1000), "float64", 2, verbose=False) == esperado
 
 
-def test_n_jobs_phase1_reflects_no_copy_estimate(monkeypatch):
-    # S3 (perf-fast-io): sin copia del raster el presupuesto baja de x5.5 a
-    # x4.5 -> mas workers con la misma RAM. 550 MB libres y raster de 8 MB:
-    # x5.5 (44 MB/worker) daria 10; x4.5 (36 MB/worker) daria 12.
+def test_n_jobs_phase1_uses_the_measured_model(monkeypatch):
+    # El modelo medido es 76 B/px + 30 MB por worker (0,10 GB en un raster de
+    # 1 Mpx). Con 550 MB disponibles: 0,8 x 550 MB / 0,10 GB = 4 workers.
+    # El estimador viejo (raster x 4.5) habria dicho 12 y desbordado la RAM.
     fn = _n_jobs_fn()
-    _stub(monkeypatch, 550 * 1024**2, 64)
-    assert fn((1000, 1000), "float64", 1) == 12
+    _stub(monkeypatch, 550 * 1024**2, cpu_fisicos=64)
+    assert fn((1000, 1000), "float64", 1, verbose=False) == 4
+
+
+def test_n_jobs_real_raster_suggests_two_on_40gb(monkeypatch):
+    # El caso que fallaba: raster de 171,5 Mpx = 12,17 GB por worker. Con 40 GB
+    # disponibles caben 2; el estimador viejo elegia 6 y provocaba
+    # ArrayMemoryError en skimage._offset_edge_map.
+    fn = _n_jobs_fn()
+    _stub(monkeypatch, 40 * 1024**3, cpu_fisicos=8)
+    assert fn((14355, 11945), "float64", 1, n_tasks=60, verbose=False) == 2
 
 
 def test_s7_single_origin_requires_two_points():
