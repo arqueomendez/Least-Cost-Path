@@ -153,57 +153,232 @@ El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml
 - `datashader` (opcional, para heatmaps alternativos)
 - **Herramientas dev** (en `pyproject.toml`): `pytest` (tests), `ruff` (lint/format), `papermill` (ejecución parametrizada sin abrir Jupyter), `nbstripout` (limpieza de outputs al hacer `git add`).
 
-## Instalación y uso con UV y Jupyter Lab
+## Instalación desde cero
 
-1. Instala [uv](https://github.com/astral-sh/uv) si no lo tienes:
+Estos pasos llevan de un equipo limpio a una ejecución funcional del notebook en
+Windows, macOS y Linux. Los ejemplos suponen que el repositorio queda en una
+carpeta llamada `Least-Cost-Path`, creada por `git clone`.
 
-   a. Con pip:
+### Requisitos previos
 
-   - **Windows**:
-     ```sh
-     pip install uv
-     ```
-   - **macOS**:
-     ```sh
-     brew install uv
-     # o
-     pip install uv
-     ```
-   - **Linux**:
-     ```sh
-     pipx install uv
-     # o
-     pip install uv
-     ```
+| Componente | Mínimo | Notas |
+|---|---|---|
+| Sistema operativo | Windows 10/11, macOS 12+, Linux x86_64 | Las tres plataformas están cubiertas con wheels binarios en x86_64 |
+| Git | 2.30 | Necesario para clonar el repositorio y para que `uv sync` obtenga `joblib` desde git |
+| `uv` | Última versión | Vía recomendada: gestiona el entorno e instala Python 3.12 si falta (`requires-python = ">=3.12"`; `.python-version` fija `3.12`) |
+| Python | 3.12 | Solo si se usa la ruta alternativa con `pip` (Paso 7) |
+| RAM | 8 GB (recomendado 16 GB) | Los rásteres grandes pueden necesitar bajar `MAX_WORKERS_PHASE1` en la Celda 3 (ver «Problemas frecuentes») |
+| Espacio en disco | ~2 GB libres | Entorno virtual y dependencias; los datos de entrada y `output/` van aparte |
+| GDAL / PROJ | Ninguno | `rasterio`, `fiona`, `pyogrio`, `geopandas` y `shapely` se instalan como wheels binarios: no hay que compilar GDAL ni usar conda. Una plataforma sin wheels (p. ej. Linux arm64) sí requiere un entorno conda con GDAL del sistema |
 
-   b. Standalone:
+### Paso 1 — Instalar Git
 
-   - **Windows**:
-     ```sh
-     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-     ```
-   - **macOS y Linux**:
-     ```sh
-     curl -LsSf https://astral.sh/uv/install.sh | sh
-     ```
+Windows (PowerShell):
 
-2. Instala todas las dependencias del proyecto:
+```sh
+winget install --id Git.Git -e
+```
 
-   - **Con uv**:
-     ```sh
-     uv sync
-     ```
-   - **Con pip**:
-     ```sh
-     pip install -r requirements.txt
-     ```
+Instalador alternativo para Windows: <https://git-scm.com/download/win>
 
-3. Inicia Jupyter Lab:
-   ```sh
-   jupyter lab
-   ```
+macOS:
 
-4. Abre y ejecuta el notebook `LCP_MCP_Geometric.ipynb`.
+```sh
+xcode-select --install
+# o, con Homebrew
+brew install git
+```
+
+Linux:
+
+```sh
+sudo apt install git      # Debian / Ubuntu
+sudo dnf install git      # Fedora / RHEL
+sudo pacman -S git        # Arch
+```
+
+### Paso 2 — Instalar uv
+
+Windows (PowerShell):
+
+```sh
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# alternativa con winget
+winget install --id=astral-sh.uv -e
+```
+
+macOS y Linux:
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Alternativas si ya hay un Python disponible:
+
+```sh
+pipx install uv
+# o
+pip install uv
+```
+
+Comprobar la instalación:
+
+```sh
+uv --version
+```
+
+En Windows hay que **cerrar y reabrir la terminal** después de instalar para que
+el `PATH` se actualice; hasta entonces `uv` responde `uv: command not found`.
+
+### Paso 3 — Clonar el repositorio
+
+```sh
+git clone -b LCP_MCP_Geometric https://github.com/arqueomendez/Least-Cost-Path.git
+cd Least-Cost-Path
+```
+
+El flag `-b LCP_MCP_Geometric` no es decorativo: la rama por defecto del
+repositorio remoto (`main`) es un puntero antiguo y heredado, y todo el trabajo
+actual vive en `LCP_MCP_Geometric`. Un `git clone` sin `-b` descarga código
+obsoleto.
+
+Verificar que se ha clonado la rama correcta:
+
+```sh
+git log -1 --oneline
+# esperado: 92b598f ... (o un commit posterior de la misma rama)
+```
+
+Actualizar el repositorio más adelante:
+
+```sh
+git pull --ff-only
+```
+
+En Windows, clonar en una ruta local corta y sin sincronización (por ejemplo
+`C:\repos\Least-Cost-Path`), **nunca** dentro de OneDrive ni de una carpeta de
+red, y activar las rutas largas antes de clonar:
+
+```sh
+git config --global core.longpaths true
+```
+
+### Paso 4 — Crear el entorno e instalar dependencias
+
+Desde la raíz del repositorio:
+
+```sh
+uv sync
+```
+
+`uv sync` crea `.venv` con Python 3.12, resuelve las versiones exactas de
+`uv.lock` e instala todos los grupos de dependencias, incluidas las herramientas
+de desarrollo (`nbstripout`, `papermill`, `pytest`, `ruff`, definidas en
+`[dependency-groups]`). La primera vez también descarga `joblib` desde su
+repositorio git, porque `pyproject.toml` lo fija en `[tool.uv.sources]` mientras
+no haya versión estable publicada.
+
+**Activar el entorno es opcional**: `uv run` antepone el `.venv` del proyecto a
+cualquier comando, así que los pasos siguientes funcionan sin activar nada. Si
+prefieres activarlo de forma explícita:
+
+Windows (PowerShell o CMD):
+
+```sh
+.venv\Scripts\activate
+```
+
+Si PowerShell bloquea el script por política de ejecución:
+
+```sh
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+macOS y Linux:
+
+```sh
+source .venv/bin/activate
+```
+
+### Paso 5 — Verificar la instalación
+
+```sh
+uv run pytest tests/ -q
+```
+
+La salida esperada es `96 passed`.
+
+```sh
+uv run ruff check .
+```
+
+Ambos comandos deben pasar antes de usar datos reales: si la suite está en verde
+y `ruff` no reporta errores, el entorno está sano.
+
+### Paso 6 — Abrir JupyterLab
+
+```sh
+uv run jupyter lab
+```
+
+Abrir `LCP_MCP_Geometric.ipynb` y ejecutar las celdas de código en orden (1 → 9).
+Las celdas 8 (puntos densificados) y 9 (mapa de calor) son post-procesamiento
+opcional y pueden omitirse sin afectar al resultado principal de la Celda 6. Las
+barras de progreso (`tqdm`) y los widgets se renderizan dentro de JupyterLab; en
+ejecuciones sin interfaz (`run_notebook.py`, `papermill`) caen a texto.
+
+### Paso 7 — Alternativa sin uv (pip + venv)
+
+Si no puedes o no quieres instalar `uv`, `requirements.txt` contiene el mismo
+conjunto de dependencias bloqueadas:
+
+Windows (Python launcher):
+
+```sh
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+macOS y Linux:
+
+```sh
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+`requirements.txt` es un volcado automático de `uv.lock` (un test de la suite
+comprueba que sigue siendo fiel) y no se edita a mano. Para regenerarlo, con `uv`
+instalado:
+
+```sh
+uv export --format requirements-txt --output-file requirements.txt
+```
+
+En esta ruta no hay `uv run`, así que los comandos se lanzan con el entorno
+activado (`pytest tests/ -q`, `ruff check .`, `jupyter lab`) y siempre desde la
+raíz del repositorio.
+
+### Problemas frecuentes de instalación
+
+| Síntoma | Causa y solución |
+|---|---|
+| `uv: command not found` | El `PATH` todavía no incluye el instalador. Cerrar y reabrir la terminal; si persiste, comprobar que `%USERPROFILE%\.local\bin` (Windows) o `~/.local/bin` (macOS/Linux) está en el `PATH` |
+| Al activar el venv: no se puede cargar el archivo porque la ejecución de scripts está deshabilitada | Política de PowerShell. Ejecutar `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` y reintentar |
+| `UnicodeEncodeError: 'charmap' codec can't encode character ...` al imprimir acentos o símbolos desde Python | La consola de Windows usa cp1252. Definir `$env:PYTHONIOENCODING = "utf-8"` en PowerShell (`set PYTHONIOENCODING=utf-8` en CMD) antes de ejecutar |
+| `ModuleNotFoundError: No module named 'lcp'` | El comando no se lanzó desde la raíz del repositorio. El paquete se importa como `lcp.<modulo>` y no está instalado en el entorno: hay que hacer `cd` a la carpeta clonada |
+| `uv sync` lento o con errores de TLS detrás de un proxy | Reapuntar la caché con `$env:UV_CACHE_DIR` (`export UV_CACHE_DIR=...` en macOS/Linux) o forzar el almacén de certificados del sistema con `uv sync --native-tls` |
+| `ArrayMemoryError: Unable to allocate ... _offset_edge_map` durante una corrida | No es un fallo de instalación: bajar `MAX_WORKERS_PHASE1` en la Celda 3 (por ejemplo a `4`) y reejecutar con `RESUME = True` |
+| El primer `uv sync` parece colgado sin mensajes | Está resolviendo y construyendo `joblib` desde git. Dejar que termine; las sincronizaciones siguientes usan la caché |
+
+### Siguiente paso
+
+Con el entorno verificado, continúa en «Uso básico» para preparar los datos de
+entrada. Los parámetros de ejecución se ajustan en la Celda 3 (ver «Celda 3 —
+Configuración central»).
 
 ## Uso básico
 
