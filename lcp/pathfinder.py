@@ -33,19 +33,36 @@ def reconstruct_path_from_traceback(traceback, start_pixel, end_pixel, offsets):
 
     La única cota de seguridad es H*W (un árbol de caminos mínimos no revisita
     celdas); alcanzarla implica un traceback corrupto.
+
+    Todo acceso a ``traceback`` está ACOTADO: se validan los extremos, el código
+    de offset (``0 <= code < len(offsets)``) y la celda destino de cada paso. Sin
+    esas comprobaciones, un traceback corrupto (todo ceros, un código inventado o
+    un camino que sale del ráster) hacía que el ``@njit`` leyera fuera del array y
+    el proceso muriera con una violación de acceso en lugar de devolver ``None``.
     """
+    filas = traceback.shape[0]
+    columnas = traceback.shape[1]
+    n_offsets = offsets.shape[0]
     start_row, start_col = start_pixel
-    hard_cap = traceback.shape[0] * traceback.shape[1]
+    hard_cap = filas * columnas
+
+    if start_row < 0 or start_row >= filas or start_col < 0 or start_col >= columnas:
+        return None
+    fin_r, fin_c = end_pixel
+    if fin_r < 0 or fin_r >= filas or fin_c < 0 or fin_c >= columnas:
+        return None
 
     # --- Pasada 1: contar ---
-    r, c = end_pixel
+    r, c = fin_r, fin_c
     n = 0
     while not (r == start_row and c == start_col) and n < hard_cap:
         code = traceback[r, c]
-        if code < 0:
+        if code < 0 or code >= n_offsets:
             return None
         r -= offsets[code, 0]
         c -= offsets[code, 1]
+        if r < 0 or r >= filas or c < 0 or c >= columnas:
+            return None
         n += 1
 
     if n >= hard_cap:
@@ -53,13 +70,17 @@ def reconstruct_path_from_traceback(traceback, start_pixel, end_pixel, offsets):
 
     # --- Pasada 2: rellenar tamaño exacto ---
     path = np.empty((n + 1, 2), dtype=np.int32)
-    r, c = end_pixel
+    r, c = fin_r, fin_c
     for k in range(n):
         path[k, 0] = r
         path[k, 1] = c
         code = traceback[r, c]
+        if code < 0 or code >= n_offsets:
+            return None
         r -= offsets[code, 0]
         c -= offsets[code, 1]
+        if r < 0 or r >= filas or c < 0 or c >= columnas:
+            return None
     path[n, 0] = start_row
     path[n, 1] = start_col
 

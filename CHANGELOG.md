@@ -171,6 +171,26 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   usa el default) + 8 pruebas de caracterización del parámetro; suite **109
   passed**, `ruff` limpio.
 
+### endurecimiento de la reconstrucción de rutas (tracebacks corruptos)
+
+- **Problema**: `reconstruct_path_from_traceback` es `@njit` y solo comprobaba
+  `code < 0`. Un traceback corrupto (todo ceros, un código de offset inventado o
+  un camino que sale del ráster) hacía que el código compilado leyera fuera del
+  array y el proceso muriera con **violación de acceso** (`0xC0000005`), tumbando
+  el worker entero en lugar de devolver `None`. Verificado: 4 de 6 escenarios
+  corruptos mataban el proceso hijo.
+- **Corrección**: se validan los extremos (`start`/`end` dentro del ráster), el
+  código de offset (`0 <= code < len(offsets)`) y la celda destino de cada paso,
+  en las dos pasadas. Cualquier anomalía devuelve `None`.
+- **Coste**: medido sobre 575 050 vértices, el resultado es idéntico y el tiempo
+  no empeora (17,9 ms con controles frente a 19,6 ms sin ellos; dentro del ruido).
+  Con la carga real (11,77 M vértices) la reconstrucción total toma ~0,43 s, muy
+  por debajo de los 39,8 s que dura la Fase 2.
+- **Pruebas**: `tests/test_pathfinder_corruption.py` (7) — los seis casos corruptos
+  se ejecutan en un **subproceso**, de modo que una regresión falla por el código
+  de salida del hijo en vez de matar pytest; más un control positivo con un
+  traceback real de `MCP_Geometric`.
+
 ### modelo de memoria por worker medido y sugerencia de workers
 
 - **Problema**: el estimador de workers de la Celda 2 usaba `raster_bytes × 4.5`

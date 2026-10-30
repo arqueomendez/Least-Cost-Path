@@ -289,6 +289,13 @@ Las funciones públicas que pueden ser ruidosas aceptan un parámetro `verbose=F
 - Declara arrays con `dtype` explícito: `np.zeros((n, 2), dtype=np.int32)`.
 - La primera llamada compila la función (JIT warm-up). Usa `warm_up_numba()` antes
   del bucle principal para evitar que el primer origen real sea penalizado.
+- **Todo acceso al `traceback` va acotado**: `reconstruct_path_from_traceback`
+  valida los extremos, el código de offset (`0 <= code < len(offsets)`) y la
+  celda destino de cada paso. Sin esas comprobaciones un traceback corrupto
+  hace que el `@njit` lea fuera del array y el proceso muere con violación de
+  acceso en lugar de devolver `None` (cubierto por
+  `tests/test_pathfinder_corruption.py`, que prueba los casos corruptos en un
+  subproceso para no tumbar la suite).
 - **El buffer del path debe estar acotado a `traceback.shape[0] + traceback.shape[1]`
   (filas + columnas del raster), no a `traceback.size`.** Usar `traceback.size`
   como tope genera un array de ~1.2 GB por llamada en rasters grandes (p. ej.
