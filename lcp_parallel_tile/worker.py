@@ -20,28 +20,23 @@ def tile_worker(task, config):
             res = (abs(src.transform.a), abs(src.transform.e))
             crs = src.crs
 
-        # --- [INICIO DE LÓGICA DE MÁSCARA MEJORADA] ---
-        
-        # 1. Crear la máscara geográfica principal (si existe)
+        # --- LÓGICA DE MÁSCARA ---
         mask_hr_geo = None
         if config.get('mask_shapefile_path'):
             mask_hr_geo = geoutils.create_mask_from_vector(config['mask_shapefile_path'], src, window=window)
         if mask_hr_geo is None:
             mask_hr_geo = np.ones_like(tile_data, dtype=bool)
 
-        # 2. Crear la máscara de borde interna para evitar artefactos
         buffer_size = config.get('TILE_EDGE_BUFFER', 1)
         internal_buffer_mask = np.ones_like(tile_data, dtype=bool)
-        internal_buffer_mask[:buffer_size, :] = False  # Borde superior
-        internal_buffer_mask[-buffer_size:, :] = False # Borde inferior
-        internal_buffer_mask[:, :buffer_size] = False  # Borde izquierdo
-        internal_buffer_mask[:, -buffer_size:] = False # Borde derecho
-
-        # 3. Combinar ambas máscaras para obtener la máscara de búsqueda final
-        search_mask_hr = np.logical_and(mask_hr_geo, internal_buffer_mask)
+        internal_buffer_mask[:buffer_size, :] = False
+        internal_buffer_mask[-buffer_size:, :] = False
+        internal_buffer_mask[:, :buffer_size] = False
+        internal_buffer_mask[:, -buffer_size:] = False
         
-        # --- [FIN DE LÓGICA DE MÁSCARA MEJORADA] ---
-
+        # Esta es la máscara base, que prohíbe los bordes.
+        base_search_mask_hr = np.logical_and(mask_hr_geo, internal_buffer_mask)
+        
         nodes_list = list(border_nodes.items())
         num_rutas_calculadas = 0
         
@@ -50,11 +45,19 @@ def tile_worker(task, config):
                 id_start, start_pixel_hr = nodes_list[i]
                 id_end, end_pixel_hr = nodes_list[j]
                 
+                # --- [INICIO DE CORRECCIÓN CRÍTICA] ---
+                # Hacemos una copia de la máscara base para este cálculo específico.
+                search_mask_hr_for_this_run = base_search_mask_hr.copy()
+                # "Legalizamos" los píxeles de inicio y fin en esta copia temporal.
+                search_mask_hr_for_this_run[start_pixel_hr] = True
+                search_mask_hr_for_this_run[end_pixel_hr] = True
+                # --- [FIN DE CORRECCIÓN CRÍTICA] ---
+
                 path_found_lr, path_pixels_lr, successful_factor, trans_low = False, None, None, None
                 for factor in config['downsampling_factors']:
                     cost_lr = geoutils.create_low_res_data(tile_data, factor)
-                    # La máscara de baja resolución ahora también incluye el buffer interno
-                    mask_lr = search_mask_hr[::factor, ::factor]
+                    # La máscara de baja resolución se crea a partir de la máscara temporal
+                    mask_lr = search_mask_hr_for_this_run[::factor, ::factor]
                     trans_lr = tile_transform * tile_transform.scale(factor, factor)
                     dx_lr, dy_lr = res[0] * factor, res[1] * factor
                     start_lr = (start_pixel_hr[0] // factor, start_pixel_hr[1] // factor)
@@ -69,8 +72,8 @@ def tile_worker(task, config):
                 path_found_hr, came_from_hr = False, None
                 if path_found_lr:
                     corridor_mask = geoutils.create_search_corridor(path_pixels_lr, tile_data.shape, successful_factor, config['corridor_buffer_pixels'])
-                    # La máscara final es la intersección del corredor Y la máscara de búsqueda principal
-                    final_mask = np.logical_and(corridor_mask, search_mask_hr)
+                    # La máscara final ahora usa la máscara temporal que legaliza los puntos
+                    final_mask = np.logical_and(corridor_mask, search_mask_hr_for_this_run)
                     path_found_hr, came_from_hr, _ = pathfinder.a_star_numba_compiled(tile_data, nodata, start_pixel_hr, end_pixel_hr, res[0], abs(res[1]), config['heuristic_weight'], final_mask)
                 
                 if path_found_hr:
