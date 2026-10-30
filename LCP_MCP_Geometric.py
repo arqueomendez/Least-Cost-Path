@@ -181,6 +181,20 @@ RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9
 MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
                                 # workers de Fase 1 si topa con ArrayMemoryError en rams compartidas
 
+# --- Mascara del area de estudio --------------------------------------------
+# MASK_ALL_TOUCHED=False (ESTRICTA): solo los pixeles cuyo CENTRO cae dentro del
+# poligono son navegables. Con True la mascara se expande a todo pixel que el
+# poligono apenas roza; ese anillo exterior conserva el coste del modelo y, si es
+# barato, forma un corredor continuo por el borde del poligono (las rutas se
+# pegan al borde en vez de cruzar el interior). Ponlo en True solo si tienes
+# puntos legitimos justo sobre el limite y aceptas ese sesgo de borde.
+MASK_ALL_TOUCHED = False
+# EDGE_BUFFER_PX: excluye las N filas/columnas exteriores del raster (0 = no
+# excluye nada). Util cuando el modelo de coste no es fiable en los limites (es
+# mas barato que el interior) y la mascara cubre todo el raster: sin esto, ese
+# marco funciona como corredor perimetral de bajo coste.
+EDGE_BUFFER_PX = 0
+
 # --- 3. Opciones de Almacenamiento ---
 KEEP_PHASE1_FILES = False
 VERBOSE = False
@@ -288,7 +302,9 @@ try:
 
     with rasterio.open(COST_RASTER_PATH) as src:
         if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
-            vector_mask = proc.create_mask_from_vector(MASK_SHAPEFILE_PATH, src)
+            vector_mask = proc.create_mask_from_vector(
+                MASK_SHAPEFILE_PATH, src, all_touched=MASK_ALL_TOUCHED
+            )
         else:
             print("  ADVERTENCIA: Sin archivo de máscara. Se usará toda la extensión.")
             vector_mask = np.ones(src.shape, dtype=bool)
@@ -302,6 +318,30 @@ try:
             nodata_mask = np.zeros(src.shape, dtype=bool)
 
         main_search_mask = vector_mask & ~nodata_mask
+
+        # EDGE_BUFFER_PX: recorta el marco exterior del raster (0 = sin recorte).
+        # Se aplica sobre la mascara final para que el marco nunca sea navegable.
+        edge_frame = proc.edge_frame_mask(src.shape, EDGE_BUFFER_PX)
+        if edge_frame.any():
+            n_excl = int((main_search_mask & edge_frame).sum())
+            main_search_mask = main_search_mask & ~edge_frame
+            print(
+                f"  > EDGE_BUFFER_PX={EDGE_BUFFER_PX}: {n_excl} pixeles del marco "
+                f"exterior del raster excluidos del area navegable."
+            )
+
+        # Diagnostico: si el poligono de mascara cubre todo el raster no restringe
+        # nada, y los bordes del raster quedan navegables.
+        if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
+            n_vec = int(vector_mask.sum())
+            n_tot = int(vector_mask.size)
+            if n_vec >= n_tot:
+                print(
+                    f"  ADVERTENCIA: el poligono de mascara cubre TODO el raster "
+                    f"({n_vec}/{n_tot} pixeles): no restringe el area de busqueda. "
+                    f"Si el modelo de coste es barato en los bordes, usa "
+                    f"EDGE_BUFFER_PX o una mascara mas ajustada."
+                )
 
         all_points_for_validation, _ = dl.load_points_as_dict(
             ALL_POINTS_SHAPEFILE, ID_FIELD_NAME
@@ -322,6 +362,27 @@ try:
                or not main_search_mask[row, col]:
                 invalid_point_ids.append(str(point_id))
 
+        # Puntos que quedan fuera SOLO por la mascara estricta: el poligono los
+        # roza pero su centro cae fuera. Se detectan para dar un mensaje
+        # accionable (all_touched=True los admitiria) en vez de un error opaco.
+        border_point_ids = []
+        if (
+            invalid_point_ids
+            and not MASK_ALL_TOUCHED
+            and MASK_SHAPEFILE_PATH
+            and os.path.exists(MASK_SHAPEFILE_PATH)
+        ):
+            touch_mask = proc.create_mask_from_vector(
+                MASK_SHAPEFILE_PATH, src, all_touched=True
+            )
+            ring = touch_mask & ~vector_mask
+            for point_id, coords in all_points_for_validation.items():
+                row, col = rasterio.transform.rowcol(
+                    src.transform, coords[0], coords[1]
+                )
+                if 0 <= row < src.height and 0 <= col < src.width and ring[row, col]:
+                    border_point_ids.append(str(point_id))
+
         if not invalid_point_ids:
             print("¡Correcto! Todos los puntos están dentro del área válida final.")
 
@@ -334,6 +395,16 @@ try:
             f"(fuera de la máscara o con 'nodata'). IDs de muestra: "
             f"{', '.join(invalid_point_ids[:10])}"
             f"{'...' if len(invalid_point_ids) > 10 else ''}."
+            + (
+                f" {len(border_point_ids)} de ellos caen sobre el BORDE del poligono "
+                f"de mascara ({', '.join(border_point_ids[:10])}"
+                f"{'...' if len(border_point_ids) > 10 else ''}): con "
+                f"MASK_ALL_TOUCHED=False (mascara estricta) su pixel queda fuera del "
+                f"area navegable. Pon MASK_ALL_TOUCHED=True en la Celda 3 (acepta el "
+                f"sesgo de borde) o mueve el punto / corrige el poligono."
+                if border_point_ids
+                else ""
+            )
         )
 
     if final_errors:

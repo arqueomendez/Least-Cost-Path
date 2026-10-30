@@ -117,8 +117,37 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   fixture MultiPoint (`Se cargaron 5 puntos`), suite **87 passed**, corrida de
   muestra 91/91 con 0 errores y los 3 PNG (C5/C7 desde el dict).
 
-### control de workers de Fase 1 (OOM verificado en dos máquinas)
+### corrección del sesgo de borde de la máscara
 
+- Síntoma reportado: algunas rutas se dirigían al borde del polígono de máscara y
+  lo recorrían para alcanzar otros puntos — un corredor de bajo coste que el
+  polígono no cubría. Causa: `create_mask_from_vector` rasterizaba con
+  `all_touched=True`, de modo que la máscara **se expandía** a todo píxel que el
+  polígono apenas rozaba. Ese anillo exterior conserva el valor del modelo de
+  coste; si el modelo es barato fuera del área de estudio, el anillo forma un
+  camino continuo de bajo coste que rodea el polígono, y el LCP lo prefiere
+  frente a cruzar el interior.
+- **`MASK_ALL_TOUCHED`** (Celda 3, default `False` = máscara estricta): solo son
+  navegables los píxeles cuyo **centro** cae dentro del polígono. `True`
+  restaura el comportamiento anterior para quien tenga puntos legítimos justo
+  sobre el límite; la Celda 4 avisa entonces del sesgo de borde.
+- **`EDGE_BUFFER_PX`** (Celda 3, default `0`): excluye las N filas/columnas
+  exteriores del ráster. Con la máscara estricta, el anillo lo aporta el propio
+  polígono, pero si la máscara cubre todo el ráster el corredor barato está en el
+  marco del modelo de coste (verificado en los datos reales: medianas de coste
+  ~5 y ~12 en los márgenes izquierdo/derecho frente a ~33 en el centro).
+- Diagnóstico nuevo en la Celda 4: si el polígono de máscara cubre el 100 % del
+  ráster se avisa de que **no restringe** el área de búsqueda; si algún punto
+  cae inválido por quedar en el anillo rozado, el error lo explica y propone las
+  dos salidas (activar `MASK_ALL_TOUCHED` o corregir el polígono/punto), en vez
+  de listar un ID sin contexto.
+- Verificación: RED `TypeError: unexpected keyword 'all_touched'` → GREEN
+  (4 pins nuevos en `test_processing.py` + 2 pins de cableado en
+  `test_notebook_hardening.py`), y ejecución de las Celdas 1-4 con los datos
+  reales: máscara estricta sin puntos inválidos + aviso de máscara total; con
+  `EDGE_BUFFER_PX=200` se excluyen 10 360 000 píxeles del marco.
+
+### control de workers de Fase 1 (OOM verificado en dos máquinas)
 - **`MAX_WORKERS_PHASE1`** (Celda 3, default `None` = automático): tope manual
   de workers de la Fase 1. Motivo: con el ráster real (14 355 × 11 945 ≈ 171 Mpx,
   float64 = 1,37 GB) cada worker necesita además un bloque **contiguo** de

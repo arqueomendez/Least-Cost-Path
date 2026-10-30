@@ -138,6 +138,15 @@ dentro del notebook (tabla comparativa, cuándo usar cada uno, CLI y salidas).
 
 **OOM en Fase 1 (datos grandes)**: si aparece `ArrayMemoryError: Unable to allocate … _offset_edge_map`, cada worker necesita un bloque **contiguo** de ~2× el ráster (2,74 GB para 14 355 × 11 945) además de sus buffers — con la RAM comprometida por otras aplicaciones la asignación falla aunque parezca que sobra memoria. Remedio: baja `MAX_WORKERS_PHASE1` en la Celda 3 (p. ej. `4`) y re-ejecuta; con `RESUME=True` los `.npz` sanos se reutilizan y solo se recalculan los orígenes fallidos.
 
+**Rutas pegadas al borde del polígono (corredor de bajo coste)**: la máscara es
+ESTRICTA por defecto (`MASK_ALL_TOUCHED=False`): solo los píxeles cuyo centro cae
+dentro del polígono son navegables. Con `all_touched=True` la máscara se expandía
+al anillo que el polígono apenas roza y ese anillo, que conserva el coste del
+modelo, funcionaba como corredor perimetral barato. Si el modelo de coste es
+poco fiable en los límites del ráster, pon `EDGE_BUFFER_PX = N` para excluir las
+N filas/columnas exteriores. La Celda 4 avisa si el polígono cubre el 100 % del
+ráster (entonces no restringe nada).
+
 Para retomar resultados ya calculados sin reejecutar el pipeline completo, corre
 solo las celdas 8 y 9: ambas autodetectan la última sesión de `output/` cuando
 `OUTPUT_DIR` no apunta a una sesión válida (la Celda 9 busca el archivo

@@ -89,3 +89,22 @@ def test_max_workers_phase1_override():
     assert "MAX_WORKERS_PHASE1" in s
     i = s.index("MAX_WORKERS_PHASE1")
     assert "min(n_jobs_p1" in s[i : i + 400]
+
+
+def test_mask_all_touched_param_wired():
+    # S-extra (sesgo de borde): la mascara es ESTRICTA por defecto y el parametro
+    # llega hasta create_mask_from_vector; sin esto la mascara se expande un anillo
+    # fuera del poligono y ese anillo barato se vuelve corredor perimetral.
+    assert "MASK_ALL_TOUCHED" in SRC[2]
+    s4 = SRC[3]
+    assert "all_touched=MASK_ALL_TOUCHED" in s4
+
+
+def test_edge_buffer_param_wired():
+    # S-extra (marco barato del raster): EDGE_BUFFER_PX excluye el marco exterior
+    # del raster cuando el modelo de coste no es fiable en los limites.
+    assert "EDGE_BUFFER_PX" in SRC[2]
+    s4 = SRC[3]
+    assert "EDGE_BUFFER_PX" in s4
+    i = s4.index("EDGE_BUFFER_PX")
+    assert "main_search_mask" in s4[i : i + 900]
