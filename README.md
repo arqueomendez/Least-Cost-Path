@@ -103,8 +103,7 @@ Parámetros editables por el usuario:
 | `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
 | `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
 | `MAX_WORKERS_PHASE1`   | `None` = automático; entero (p. ej. `4`) para limitar los workers de Fase 1 si topa con `ArrayMemoryError` en rams compartidas |
-| `MASK_ALL_TOUCHED`     | `False` (estricta): solo píxeles cuyo **centro** cae dentro del polígono. `True` expande la máscara al anillo que el polígono roza — ese anillo conserva el coste del modelo y puede actuar como corredor perimetral barato |
-| `EDGE_BUFFER_PX`       | `0` = no excluye nada. `N` excluye las `N` filas/columnas exteriores del ráster: corta el corredor perimetral cuando el modelo de coste es poco fiable en los límites |
+| `EDGE_BUFFER_PX`       | `0` = no excluye nada. `N` excluye las `N` filas/columnas exteriores del ráster: corta el corredor perimetral cuando el modelo de coste es poco fiable en los límites (la máscara del polígono es siempre **estricta**, no configurable) |
 
 ### Celda 4 — Verificación de coherencia de datos
 Valida CRS idénticos (ráster/puntos/máscara), solape espacial y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o `nodata` — los IDs problemáticos se listan). En modo `single_origin` comprueba además que el modo sea válido, que haya ≥ 2 puntos y que `ORIGIN_ID` exista. Cualquier problema **detiene la ejecución** con un mensaje concreto antes de calcular nada.

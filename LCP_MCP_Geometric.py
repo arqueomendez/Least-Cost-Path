@@ -182,13 +182,13 @@ MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para li
                                 # workers de Fase 1 si topa con ArrayMemoryError en rams compartidas
 
 # --- Mascara del area de estudio --------------------------------------------
-# MASK_ALL_TOUCHED=False (ESTRICTA): solo los pixeles cuyo CENTRO cae dentro del
-# poligono son navegables. Con True la mascara se expande a todo pixel que el
-# poligono apenas roza; ese anillo exterior conserva el coste del modelo y, si es
-# barato, forma un corredor continuo por el borde del poligono (las rutas se
-# pegan al borde en vez de cruzar el interior). Ponlo en True solo si tienes
-# puntos legitimos justo sobre el limite y aceptas ese sesgo de borde.
-MASK_ALL_TOUCHED = False
+# La mascara se rasteriza siempre en modo ESTRICTO: solo son navegables los
+# pixeles cuyo CENTRO cae dentro del poligono. Incluir ademas los pixeles que
+# el poligono apenas roza agrega un anillo exterior de 1 px que conserva el
+# coste del modelo; si ese coste es menor que el del interior, las rutas lo
+# usan como corredor perimetral (verificado: ~20x mas baratas desde una razon
+# de coste interior/exterior de 2.5). La rasterizacion permisiva ya no es una
+# opcion de configuracion.
 # EDGE_BUFFER_PX: excluye las N filas/columnas exteriores del raster (0 = no
 # excluye nada). Util cuando el modelo de coste no es fiable en los limites (es
 # mas barato que el interior) y la mascara cubre todo el raster: sin esto, ese
@@ -302,9 +302,7 @@ try:
 
     with rasterio.open(COST_RASTER_PATH) as src:
         if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
-            vector_mask = proc.create_mask_from_vector(
-                MASK_SHAPEFILE_PATH, src, all_touched=MASK_ALL_TOUCHED
-            )
+            vector_mask = proc.create_mask_from_vector(MASK_SHAPEFILE_PATH, src)
         else:
             print("  ADVERTENCIA: Sin archivo de máscara. Se usará toda la extensión.")
             vector_mask = np.ones(src.shape, dtype=bool)
@@ -364,11 +362,12 @@ try:
 
         # Puntos que quedan fuera SOLO por la mascara estricta: el poligono los
         # roza pero su centro cae fuera. Se detectan para dar un mensaje
-        # accionable (all_touched=True los admitiria) en vez de un error opaco.
+        # accionable en vez de un error opaco. La salida NO es abrir el anillo del
+        # poligono (crearia un corredor de borde): es mover el punto o
+        # corregir/erosionar el poligono.
         border_point_ids = []
         if (
             invalid_point_ids
-            and not MASK_ALL_TOUCHED
             and MASK_SHAPEFILE_PATH
             and os.path.exists(MASK_SHAPEFILE_PATH)
         ):
@@ -398,10 +397,10 @@ try:
             + (
                 f" {len(border_point_ids)} de ellos caen sobre el BORDE del poligono "
                 f"de mascara ({', '.join(border_point_ids[:10])}"
-                f"{'...' if len(border_point_ids) > 10 else ''}): con "
-                f"MASK_ALL_TOUCHED=False (mascara estricta) su pixel queda fuera del "
-                f"area navegable. Pon MASK_ALL_TOUCHED=True en la Celda 3 (acepta el "
-                f"sesgo de borde) o mueve el punto / corrige el poligono."
+                f"{'...' if len(border_point_ids) > 10 else ''}): la mascara es estricta; el pixel del punto queda "
+                f"fuera del area navegable. "
+                f"Mueve el punto hacia el interior del poligono, o "
+                f"corrige/erosiona el poligono."
                 if border_point_ids
                 else ""
             )

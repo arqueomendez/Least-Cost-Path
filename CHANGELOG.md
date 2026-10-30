@@ -147,6 +147,30 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
   reales: máscara estricta sin puntos inválidos + aviso de máscara total; con
   `EDGE_BUFFER_PX=200` se excluyen 10 360 000 píxeles del marco.
 
+### retiro del interruptor de máscara permisiva (`MASK_ALL_TOUCHED`)
+
+- La máscara del área de estudio es **siempre estricta**: solo son navegables los
+  píxeles cuyo centro cae dentro del polígono. El parámetro `MASK_ALL_TOUCHED`
+  desaparece de la Celda 3 y `create_mask_from_vector(..., all_touched=True)`
+  queda solo para diagnóstico y pruebas.
+- Motivo (evaluación medida, `tests/test_mask_all_touched_effect.py` y
+  `scripts/mask_all_touched_eval.py`): la rasterización permisiva agrega un anillo
+  exterior de 1 px con el coste del modelo. Su peso relativo cae al crecer el
+  polígono (21,0 % → 1,0 % del área navegable de 20 a 400 px de lado) pero **el
+  ahorro no**: la ruta sigue siendo ~20× más barata (ratio 0,096 → 0,043). El
+  anillo se vuelve atractivo desde una razón de coste interior/exterior de **2,5**
+  y es irrelevante con ≤ 2.
+- Efectos nulos comprobados: polígono que contiene el ráster (máscaras y rutas
+  idénticas), bordes alineados al píxel (máscaras iguales), y en diagonal 45° el
+  anillo es de 1 celda y solo conecta en 8 (funciona porque MCP usa
+  `fully_connected=True`).
+- Su único uso legítimo (admitir un punto cuyo centro queda fuera del polígono) se
+  resuelve ahora con un mensaje accionable en la Celda 4: mover el punto o
+  corregir/erosionar el polígono, nunca abrir el anillo.
+- Verificación: pin de notebook reescrito (no queda el knob y la máscara navegable
+  usa el default) + 8 pruebas de caracterización del parámetro; suite **109
+  passed**, `ruff` limpio.
+
 ### control de workers de Fase 1 (OOM verificado en dos máquinas)
 - **`MAX_WORKERS_PHASE1`** (Celda 3, default `None` = automático): tope manual
   de workers de la Fase 1. Motivo: con el ráster real (14 355 × 11 945 ≈ 171 Mpx,

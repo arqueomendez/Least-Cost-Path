@@ -91,13 +91,22 @@ def test_max_workers_phase1_override():
     assert "min(n_jobs_p1" in s[i : i + 400]
 
 
-def test_mask_all_touched_param_wired():
-    # S-extra (sesgo de borde): la mascara es ESTRICTA por defecto y el parametro
-    # llega hasta create_mask_from_vector; sin esto la mascara se expande un anillo
-    # fuera del poligono y ese anillo barato se vuelve corredor perimetral.
-    assert "MASK_ALL_TOUCHED" in SRC[2]
+def test_mask_is_always_strict_in_the_notebook():
+    # El parametro MASK_ALL_TOUCHED se RETIRO de la configuracion: la evaluacion
+    # (tests/test_mask_all_touched_effect.py) muestra que abre un anillo exterior
+    # que la ruta prefiere a partir de una razon de coste interior/exterior de 2.5,
+    # con ~20x de ahorro incluso en poligonos grandes, y que su unico uso legitimo
+    # (puntos sobre el limite) no aplica. El notebook usa el default estricto.
+    assert "MASK_ALL_TOUCHED" not in SRC[2]
     s4 = SRC[3]
-    assert "all_touched=MASK_ALL_TOUCHED" in s4
+    assert "MASK_ALL_TOUCHED" not in s4
+    # La mascara NAVEGABLE se construye con el default estricto.
+    assert "vector_mask = proc.create_mask_from_vector(MASK_SHAPEFILE_PATH, src)" in s4
+    # El unico uso de all_touched=True es el diagnostico que detecta puntos sobre
+    # el borde (touch_mask); nunca alimenta la mascara de busqueda.
+    assert s4.count("all_touched=True") == 1
+    i = s4.index("all_touched=True")
+    assert "touch_mask" in s4[max(0, i - 250) : i]
 
 
 def test_edge_buffer_param_wired():
