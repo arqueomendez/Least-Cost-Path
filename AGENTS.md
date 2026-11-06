@@ -86,6 +86,11 @@ Existe una suite de **pytest** en `tests/`:
 | `test_notebook_hardening.py` | pins estructurales de los specs S2-S8 del notebook (fuente, sin ejecutarlo) |
 | `test_requirements_export.py` | S15: `requirements.txt` fiel a `uv.lock` y cabecera con el comando generador |
 | `test_star_origin_mode.py` | pins estructurales del modo estrella (S1-S6: enum, validación, rama, echo, resaltado, tag `parameters`) |
+| `test_planner.py` | `build_pair_plan` por modo (`all_pairs` / `single_origin` / `cross_layers`), políticas de inversión y `identical_pixel_pairs` |
+| `test_outputs.py` | nombres canónicos de los artefactos por raíz (S5), manifiesto (S7) y escritura atómica por archivo (S8) |
+| `test_postprocessing_direction.py` | columnas `length_m` / `cost_total` y capas de `build_route_record` (S6), reconstrucción directa e invertida, descarte de coste no finito (S9) |
+| `test_cross_layers_notebook.py` | pins de las Celdas 1/3/4/6 del modo `cross_layers` (S1, S3, S4, S5, S7, S8, S9) + corrida end-to-end con dos capas |
+| `test_cross_layers_outputs_pins.py` | pins de las Celdas 5/7/8/9 por raíz (S10) y del camino legacy hacia los archivos unificados |
 
 ### Ejecutar los tests
 
@@ -124,17 +129,41 @@ El notebook principal es `LCP_MCP_Geometric.ipynb`. Ejecuta las celdas en orden
 (1 → 9). Los parámetros de usuario están en **Celda 3** (pipeline principal) y en
 **Celdas 8 y 9** (post-procesamiento: puntos densificados y heatmap).
 
-**Modos de análisis (Celda 3, etiquetada `parameters`)**: `ANALYSIS_MODE = "all_pairs"`
-(default, N×(N−1)/2) o `"single_origin"` + `ORIGIN_ID` (un origen hacia todos los
-demás, sin pares entre destinos — SSSP vs APSP). Ejecución parametrizada sin editar
-el notebook:
+**Modos de análisis (Celda 3, etiquetada `parameters`)**: `ANALYSIS_MODE` acepta
+`"all_pairs"` (default, N×(N−1)/2), `"single_origin"` + `ORIGIN_ID` (un origen
+hacia todos los demás, sin pares entre destinos — SSSP vs APSP) y
+`"cross_layers"` (dos capas, M×N). Ejecución parametrizada sin editar el
+notebook:
 
 ```sh
+# modo estrella
 uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
+# dos capas: cada sitio hacia todas las fuentes
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE cross_layers -p ORIGIN_POINTS_PATH "D:\Sitios y fuentes\Sitios.gpkg" -p DEST_POINTS_PATH "D:\Sitios y fuentes\Fuentes.gpkg"
 ```
 
-Una **celda markdown en español** justo antes de la Celda 3 documenta ambos modos
+Dos **celdas markdown en español** antes de la Celda 3 documentan los modos
 dentro del notebook (tabla comparativa, cuándo usar cada uno, CLI y salidas).
+
+**Modo `cross_layers` (dos capas)**: `ORIGIN_POINTS_PATH` (capa de sitios) y
+`DEST_POINTS_PATH` (capa de fuentes), cada una con su campo id
+(`ORIGIN_ID_FIELD` / `DEST_ID_FIELD`, default `"id"`). Cada capa se carga en un
+diccionario PROPIO y **nunca se fusionan** (los ids se repiten entre capas y es
+legítimo). Semántica: M sitios x N fuentes, todos contra todas, sin pares dentro
+de la misma capa y sin dedup por id. `INVERT_DIRECTION` (`"auto"` | `"never"` |
+`"always"`, solo en este modo) invierte cuando hay menos destinos que orígenes
+(`"auto"`): un MCP por **fuente**, rutas registradas con la misma semántica
+sitio->fuente y la polilínea invertida; `cost_total` es idéntico por simetría de
+`MCP_Geometric` y la geometría puede diferir por empates. La Celda 4 valida la
+política, el CRS y los píxeles válidos de **ambas** capas, y aborta si un sitio y
+una fuente caen en el **mismo píxel**. Salidas **no unificadas**, una por raíz MCP
+(`rutas_por_origen/rutas_origen_<root>.gpkg`,
+`mapas_por_origen/mapa_origen_<root>.png`,
+`puntos_por_origen/puntos_origen_<root>.gpkg`,
+`heatmaps_por_origen/heatmap_origen_<root>_<res>m_<bw>km_<kernel>.tif`) más
+`manifest_rutas_por_origen.csv`; los modos legacy siguen escribiendo
+`red_completa_unificada.gpkg` sin cambios. `HEATMAP_ORIGIN_IDS = None` limita el
+KDE por raíz a un subconjunto de raíces.
 
 **Memoria por worker y sugerencia de workers**: la Celda 2 detecta el hardware
 (RAM disponible, núcleos físicos/lógicos, disco libre) e imprime el pico
@@ -184,7 +213,9 @@ del notebook automáticamente. La evidencia de cada corrida vive en los
 | `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`); valida IDs duplicados de puntos y explota `MultiPoint` (ids derivados `id*1000+j`). |
 | `processing.py` | Conversión mundo↔píxel, creación de máscaras raster desde vectores, corredor de búsqueda. |
 | `pathfinder.py` | Motor MCP (`MCP_Geometric`), reconstrucción de traceback con Numba `@njit`, y `compute_and_save_cost_surface()` (worker Fase 1: calcula superficie de coste y guarda traceback comprimido en `.npz`). |
-| `postprocessing.py` | Extrae todas las rutas desde un origen dado (`extract_routes`); aplica deduplicación `dest_id > origin_id`; y `reconstruct_routes_from_disk()` (worker Fase 2: carga traceback desde `.npz` y reconstruye rutas). |
+| `postprocessing.py` | Extrae todas las rutas desde un origen dado (`extract_routes`); aplica deduplicación `dest_id > origin_id`; y `reconstruct_routes_from_disk()` (worker Fase 2: carga traceback desde `.npz` y reconstruye rutas). `reconstruct_inverted_routes_from_disk()` hace lo mismo con la raíz en la capa de destinos y la polilínea invertida. |
+| `planner.py` | Planificador puro (sin E/S) de pares por raíz MCP: `build_pair_plan(mode, origins, dests, origin_id, invert)` para los tres modos y `identical_pixel_pairs()` (pares sitio-fuente en el mismo píxel). |
+| `outputs.py` | Nombres canónicos de los artefactos por raíz (`session_paths`, `route_artifact`, `figure_artifact`, `dense_artifact`, `heatmap_artifact`), `write_origin_routes()` (escritura atómica por archivo) y manifiesto `manifest_rutas_por_origen.csv` (`write_manifest` / `read_manifest`). |
 | `utils.py` | Construye el registro de ruta (`build_route_record`) y guardado legacy a shapefile. |
 | `__init__.py` | Vacío; el paquete se importa con `import lcp.<modulo>`. |
 
@@ -324,11 +355,16 @@ Las funciones públicas que pueden ser ruidosas aceptan un parámetro `verbose=F
 ## 8. Salida
 
 - Formato de salida principal: **GeoPackage** (`*.gpkg`).
-- Archivo de salida: `output/session_<timestamp>/red_completa_unificada.gpkg`.
+- Archivo de salida de los modos legacy (`all_pairs`, `single_origin`):
+  `output/session_<timestamp>/red_completa_unificada.gpkg`.
+- En `cross_layers` no hay archivo unificado: cada raíz MCP escribe su propio
+  GeoPackage en `rutas_por_origen/` (ver el layout más abajo).
 - No escribas shapefiles en código nuevo; usa `build_route_record` + `GeoDataFrame`.
   `save_path_to_shapefile` en `utils.py` se mantiene solo por compatibilidad.
 
 ### Estructura de la carpeta de sesión
+
+Modos legacy (`all_pairs` / `single_origin`):
 
 ```
 output/session_<timestamp>_Refactored/
@@ -341,6 +377,32 @@ output/session_<timestamp>_Refactored/
 
 `phase1_tracebacks/` se elimina automáticamente al finalizar si `KEEP_PHASE1_FILES = False`
 (parámetro en Celda 3 del notebook).
+
+Modo `cross_layers` (un juego de artefactos por raíz MCP, nunca unificados):
+
+```
+output/session_<timestamp>_Refactored/
+├── _raster_shared.dat          # memmap temporal del raster; se elimina al finalizar
+├── phase1_tracebacks/          # un .npz por raiz MCP
+│   └── traceback_<root>.npz
+├── rutas_por_origen/
+│   └── rutas_origen_<root>.gpkg    # una capa: rutas_origen_<root>
+├── mapas_por_origen/
+│   └── mapa_origen_<root>.png      # Celda 7
+├── puntos_por_origen/
+│   └── puntos_origen_<root>.gpkg   # Celda 8; capa puntos_origen_<root>
+├── heatmaps_por_origen/
+│   └── heatmap_origen_<root>_<res>m_<bw>km_<kernel>.tif   # Celda 9
+└── manifest_rutas_por_origen.csv   # una fila por raiz
+```
+
+`<root>` es el id de la raíz MCP de esa corrida: el sitio en dirección directa y
+la fuente si la dirección se invirtió. Columnas de cada GPKG de rutas:
+`origin_id, dest_id, origin_layer, dest_layer, cost_total, length_m, n_vertices,
+geometry`, donde `length_m` es la distancia de la ruta en unidades del CRS y
+`cost_total` el coste acumulado mínimo. El manifiesto declara, por raíz:
+`root_id, capa, agrupacion, esperados, inalcanzables, escritos, estado, gpkg,
+mapa, densificado, heatmap`, y se reescribe tras cada raíz.
 
 **Limpieza de sesiones**: la carpeta `output/` acumula sesiones locales
 (ignorada por git). No hay limpieza automática: cuando ya no necesites
@@ -378,6 +440,11 @@ Worker: `lcp.pathfinder.compute_and_save_cost_surface(args)`
 - Modo `single_origin`: la Celda 6 construye **un solo task** de Fase 1 (el origen
   elegido hacia todos los demás, sin filtro `did > origin_id`); la Fase 2 reconstruye
   N−1 rutas y el resto del flujo (Celdas 7-9) es idéntico.
+- Modo `cross_layers`: hay **una Fase 1 por raíz MCP** — M tasks (una por sitio) en
+  dirección directa o N (una por fuente) si la dirección se invierte, según el plan
+  de `lcp.planner.build_pair_plan`. Los `dest_pixels` de cada task salen siempre de
+  la capa del **target** del plan (nunca del diccionario de orígenes). La huella de
+  `RESUME` incluye ambas capas, la dirección resuelta y la identidad de la máscara.
 
 ### Fase 2 — Reconstruir rutas desde disco
 
@@ -395,6 +462,11 @@ Worker: `lcp.postprocessing.reconstruct_routes_from_disk(args)`
   `red_completa_unificada.gpkg.tmp` (rename atómico con `os.replace` al final):
   la Celda 6 **nunca acumula las rutas en RAM** y el GPKG final nunca queda
   parcial. El orden de filas del GPKG = orden de finalización de los orígenes.
+- Modo `cross_layers`: la Fase 2 escribe **un GPKG por raíz**
+  (`lcp.outputs.write_origin_routes`) con **escritura atómica por archivo** (`.tmp`
+  + `os.replace`; siempre `mode="w"`, nunca `mode="a"`, que duplicaría filas),
+  más una fila del manifiesto que se reescribe tras cada raíz. Una raíz en `error`
+  no aborta las demás: la corrida termina con un reporte por raíz.
 - Progreso de ambas fases con `tqdm.auto` (joblib `verbose=0`); con
   `disable=None` las salidas headless quedan limpias. `ipywidgets` es
   **dependencia del proyecto** (8.1.9 + jupyterlab-widgets 3.0.17): en JupyterLab
