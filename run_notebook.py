@@ -39,11 +39,12 @@ def main():
         check=False,  # el returncode se inspecciona y propaga mas abajo
     )
 
+    # ASCII puro: la consola de Windows usa cp1252 y no puede codificar ✓/✗.
     if result.returncode == 0:
-        print("\n[run] ✓ Notebook ejecutado correctamente.")
+        print("\n[run] OK: notebook ejecutado correctamente.")
         print(f"[run] Resultados guardados en {NOTEBOOK}")
     else:
-        print(f"\n[run] ✗ Error durante la ejecucion (codigo {result.returncode}).")
+        print(f"\n[run] ERROR: ejecucion fallida (codigo {result.returncode}).")
         sys.exit(result.returncode)
 
 
