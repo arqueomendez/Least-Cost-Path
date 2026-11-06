@@ -132,7 +132,7 @@ def test_s10_markdown_before_every_code_cell():
     # S10: cada celda de codigo tiene su celda markdown explicativa en espanol
     # justo antes (incluye la de modos antes de la Celda 3).
     types = [c.cell_type for c in NB.cells]
-    assert types.count("markdown") == 9
+    assert types.count("markdown") == types.count("code") + 1
     assert types.count("code") == 9
     for i, t in enumerate(types):
         if t == "code":
