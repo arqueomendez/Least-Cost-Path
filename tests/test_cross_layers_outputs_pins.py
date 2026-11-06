@@ -38,8 +38,8 @@ CELL5 = 4  # Celda 5 (visualizacion diagnostica) entre las celdas de codigo
 ORIGINS = [(1, 10.5, 89.5), (2, 20.5, 89.5)]
 DESTS = [(1, 60.5, 40.5), (2, 70.5, 30.5)]
 
-HEATMAP_RES_M = 7
-HEATMAP_BANDWIDTH_M = 21
+HEATMAP_RES_M = 30
+HEATMAP_BANDWIDTH_M = 1000
 
 
 def _strip_comments(src):
@@ -109,11 +109,12 @@ def test_cell7_cross_branch_renders_one_map_per_root():
     assert "outputs.write_manifest(" in cross
     assert '_row["mapa"] = _png' in cross
     assert "plt.close(_fig)" in cross
-    # solo las raices en estado 'ok' producen mapa
-    assert 'row.get("estado") == "ok"' in cross
-    # una linea de progreso por raiz
-    assert "for _i, _row in enumerate(_rows_ok, start=1):" in cross
-    assert 'f"  [mapa {_i}/{len(_rows_ok)}] raiz {_root} ' in cross
+    # M4: una raiz 'incompleto' tambien produce mapa; solo 'error' y 'sin_rutas'
+    # se omiten (antes se filtraba `estado == "ok"` y se perdia el mapa).
+    assert 'row.get("estado") in ("ok", "incompleto")' in cross
+    # una linea de progreso por raiz procesable
+    assert "for _i, _row in enumerate(_rows_art, start=1):" in cross
+    assert 'f"  [mapa {_i}/{len(_rows_art)}] raiz {_root} ' in cross
     # origenes y destinos se marcan por separado, con las etiquetas de capa
     assert "origin_layer" in cross and "dest_layer" in cross
     assert "_origin_label" in cross and "_dest_label" in cross
@@ -133,7 +134,9 @@ def test_cell8_cross_branch_densifies_one_gpkg_per_root():
     assert '"route_idx"' in cross
     # el worker densify_chunk es el mismo del camino legacy (sin reimplementar)
     assert "delayed(densify_chunk)" in cross
-    assert "for _i, _row in enumerate(_rows_ok, start=1):" in cross
+    # M4: la raiz 'incompleto' tambien se densifica
+    assert 'row.get("estado") in ("ok", "incompleto")' in cross
+    assert "for _i, _row in enumerate(_rows_art, start=1):" in cross
 
 
 def test_cell9_cross_branch_kde_one_tif_per_root():
@@ -149,9 +152,22 @@ def test_cell9_cross_branch_kde_one_tif_per_root():
     assert "HEATMAP_ORIGIN_IDS" in cross
     assert "Raices a procesar:" in cross
     assert "Coste estimado:" in cross
+    # M4: la raiz 'incompleto' tambien produce su KDE
+    assert 'row.get("estado") in ("ok", "incompleto")' in cross
     # el KDE corre secuencial: nunca en workers paralelos
     assert "Parallel" not in cross
     assert "n_jobs" not in cross
+
+
+def test_b2_cross_branch_passes_bandwidth_in_km():
+    # B2: `heatmap_artifact` recibe km (como el camino legacy y la documentacion),
+    # no metros: pasar HEATMAP_BANDWIDTH_M crudo nombraba `1000km` un radio de 1 km.
+    cross, legacy = _branch_text(SRC[CELL9], MARKER9)
+    assert "HEATMAP_BANDWIDTH_M / 1000" in cross
+    call = cross[cross.index("outputs.heatmap_artifact(") :]
+    call = call[: call.index(")")]
+    assert "HEATMAP_BANDWIDTH_M / 1000" in call, call
+    assert "int(HEATMAP_BANDWIDTH_M/1000)" in legacy
 
 
 def test_cell9_kernel_fft_computed_once_outside_the_root_loop():
@@ -274,9 +290,9 @@ def _fixtures(tmp_path):
     return raster, origins, dests
 
 
-def _patched_sources(tmp_path, raster, origins, dests):
+def _patched_sources(tmp_path, raster, origins, dests, session_name="session_e2e"):
     """Las nueve celdas de codigo con Celda 3 (y 8, 9) parchadas a los fixtures."""
-    session = tmp_path / "session_e2e"
+    session = tmp_path / session_name
     srcs = nh.load_code_sources()
     srcs[2] = nh.patch_cell3(
         srcs[2],
@@ -321,6 +337,17 @@ def _manifest(session):
     return outputs.read_manifest(
         {"manifest": str(session / "manifest_rutas_por_origen.csv")}
     )
+
+
+def test_b2_per_root_heatmap_name_matches_the_legacy_convention(tmp_path):
+    # B2: mismo `res` / `bw` que el camino legacy, para que un radio de 1 km se
+    # nombre `1km` en los dos caminos (nunca `1000km` ni unidades en metros).
+    paths = outputs.session_paths(tmp_path)
+    res_m, bandwidth_m, kernel = 30, 1000, "quartic"
+    legacy_name = f"heatmap_{res_m}m_{int(bandwidth_m / 1000)}km_{kernel}.tif"
+    expected = legacy_name.replace("heatmap_", "heatmap_origen_7_", 1)
+    name = outputs.heatmap_artifact(paths, 7, res_m, bandwidth_m / 1000, kernel)
+    assert pathlib.Path(name).name == expected == "heatmap_origen_7_30m_1km_quartic.tif"
 
 
 def _progress_roots(out, tag):
@@ -379,7 +406,13 @@ def test_e2e_cross_layers_cells_1_to_9_produce_artifacts_per_root(tmp_path):
     assert "FFT de kernel en cache: 1" in out
     assert _progress_roots(out, "kde") == {"1", "2"}
     tifs = sorted((session / "heatmaps_por_origen").glob("heatmap_origen_*.tif"))
-    assert len(tifs) == 2
+    # B2: el nombre por raiz usa km, igual que el camino legacy (`1km`, no `1000km`)
+    _bw_km = int(HEATMAP_BANDWIDTH_M / 1000)
+    legacy_name = f"heatmap_{HEATMAP_RES_M}m_{_bw_km}km_quartic.tif"
+    assert [p.name for p in tifs] == [
+        f"heatmap_origen_{root}_{HEATMAP_RES_M}m_{_bw_km}km_quartic.tif"
+        for root in (1, 2)
+    ]
 
     # Grilla unica compartida: union de los bounds de los puntos densificados
     # de todas las raices, mas un margen = bandwidth (misma receta que legacy).
@@ -422,6 +455,98 @@ def test_e2e_cross_layers_cells_1_to_9_produce_artifacts_per_root(tmp_path):
         assert f"mapa_origen_{row['root_id']}.png" in row["mapa"]
         assert f"puntos_origen_{row['root_id']}.gpkg" in row["densificado"]
         assert f"heatmap_origen_{row['root_id']}_" in row["heatmap"]
+        # el nombre por raiz es el del camino legacy con el prefijo de la raiz
+        assert (
+            pathlib.Path(row["heatmap"]).name.replace(
+                f"heatmap_origen_{row['root_id']}_", "heatmap_", 1
+            )
+            == legacy_name
+        )
 
     # El modo nuevo no escribe el GPKG unificado en ninguna etapa.
     assert not list(session.glob("red_completa_unificada.gpkg"))
+
+
+# ---------------------------------------------------------------------------
+# 4. M1/M2/M4: raices parciales y raices caidas en una misma corrida
+# ---------------------------------------------------------------------------
+# Tres sitios x dos fuentes sobre un raster plano (las seis parejas alcanzables).
+ORIGINS3 = [(1, 10.5, 89.5), (2, 20.5, 89.5), (3, 30.5, 89.5)]
+
+# Worker de Fase 2 que simula los dos modos de fallo que `lcp.postprocessing`
+# ya devuelve como lista vacia (nunca como excepcion, para no tumbar el pool):
+# la raiz 2 pierde una ruta alcanzable y la raiz 3 no devuelve ninguna.
+LOSSY_WORKER = '''
+def _simula_fallo_fase2(args):
+    """Worker de Fase 2 con raices perdidas (M1/M4 del notebook)."""
+    _root, _records = postp.reconstruct_routes_from_disk(args)
+    if int(_root) == 2:
+        return (_root, list(_records)[:-1])
+    if int(_root) == 3:
+        return (_root, [])
+    return (_root, _records)
+'''
+
+
+def _patched_sources_with_lossy_worker(tmp_path, raster, origins, dests):
+    """Las nueve celdas con la Fase 2 de la Celda 6 sustituida por el stub."""
+    srcs, session = _patched_sources(
+        tmp_path, raster, origins, dests, session_name="session_lossy"
+    )
+    marker = "else postp.reconstruct_routes_from_disk"
+    assert marker in srcs[5]
+    srcs[5] = (
+        LOSSY_WORKER + "\n" + srcs[5].replace(marker, "else _simula_fallo_fase2", 1)
+    )
+    return srcs, session
+
+
+def test_e2e_m1_m2_m4_partial_and_crashed_roots(tmp_path):
+    # M1: una raiz sin rutas pese a esperar parejas alcanzables es 'error' (no
+    # 'sin_rutas') y deja pipeline_ok=False; una raiz que pierde solo algunas es
+    # 'incompleto' y avisa nombrandola (M2).
+    # M4: las dos raices procesables ('ok' e 'incompleto') producen mapa,
+    # densificado y KDE; la raiz en 'error' no produce ninguno.
+    raster = tmp_path / "cost.tif"
+    _write_flat_raster(raster)
+    origins = tmp_path / "Sitios.shp"
+    dests = tmp_path / "Fuentes.shp"
+    nh.write_points(origins, ORIGINS3, crs="EPSG:32719")
+    nh.write_points(dests, DESTS, crs="EPSG:32719")
+
+    srcs, session = _patched_sources_with_lossy_worker(tmp_path, raster, origins, dests)
+    out, err = nh.run_code(srcs, timeout=1200)
+    assert err is None, err
+
+    rows = {row["root_id"]: row for row in _manifest(session)}
+    assert set(rows) == {"1", "2", "3"}
+    assert rows["1"]["estado"] == "ok"
+    assert rows["2"]["estado"] == "incompleto"
+    assert rows["3"]["estado"] == "error"
+    assert (rows["1"]["esperados"], rows["1"]["escritos"]) == ("2", "2")
+    assert (rows["2"]["esperados"], rows["2"]["escritos"]) == ("2", "1")
+    assert (rows["3"]["esperados"], rows["3"]["escritos"]) == ("2", "0")
+    assert rows["3"]["inalcanzables"] == "0"
+
+    # M1: el estado viene del terno (esperados, inalcanzables, escritos)
+    assert "(3, 'error')" in out, out[-3000:]
+    assert "(3, 'sin_rutas')" not in out
+    # M2: la raiz incompleta avisa y la corrida no es un exito completo
+    assert "(2, 'incompleto')" in out, out[-3000:]
+    assert "NO es un exito completo" in out
+    # M1: pipeline_ok solo es False por la raiz en 'error' -> evidencia conservada
+    assert "Tracebacks de Fase 1 conservados" in out
+
+    # M4: mapa, densificado y KDE para 'ok' e 'incompleto', nunca para 'error'
+    assert _progress_roots(out, "mapa") == {"1", "2"}
+    assert _progress_roots(out, "dens") == {"1", "2"}
+    assert _progress_roots(out, "kde") == {"1", "2"}
+    for root in ("1", "2"):
+        for column in ("gpkg", "mapa", "densificado", "heatmap"):
+            assert rows[root][column], (root, column)
+            assert pathlib.Path(rows[root][column]).exists(), (root, column)
+    for column in ("mapa", "densificado", "heatmap"):
+        assert rows["3"][column] == "", (column, rows["3"][column])
+    assert not (session / "mapas_por_origen" / "mapa_origen_3.png").exists()
+    assert not (session / "puntos_por_origen" / "puntos_origen_3.gpkg").exists()
+    assert not list((session / "heatmaps_por_origen").glob("heatmap_origen_3_*.tif"))

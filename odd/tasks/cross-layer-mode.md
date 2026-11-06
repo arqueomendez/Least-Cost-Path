@@ -27,32 +27,64 @@ Regresion obligatoria: `all_pairs` 14 puntos = 91 rutas; `single_origin` = 13 ru
 # lcp/planner.py
 MODES = ("all_pairs", "single_origin", "cross_layers")
 INVERT_POLICIES = ("auto", "never", "always")
+
+
 def build_pair_plan(mode, origins, dests=None, origin_id=None, invert="never"): ...
-def identical_pixel_pairs(origin_pixels, dest_pixels): ...  # [(oid, did)] mismo (row, col)
+def identical_pixel_pairs(
+    origin_pixels, dest_pixels
+): ...  # [(oid, did)] mismo (row, col)
+
 
 # lcp/outputs.py
 MANIFEST_NAME = "manifest_rutas_por_origen.csv"
-MANIFEST_COLUMNS = ("root_id", "capa", "agrupacion", "esperados", "inalcanzables",
-                    "escritos", "estado", "gpkg", "mapa", "densificado", "heatmap")
-def session_paths(output_dir): ...            # crea subdirs, devuelve rutas absolutas
+MANIFEST_COLUMNS = (
+    "root_id",
+    "capa",
+    "agrupacion",
+    "esperados",
+    "inalcanzables",
+    "escritos",
+    "estado",
+    "gpkg",
+    "mapa",
+    "densificado",
+    "heatmap",
+)
+
+
+def session_paths(output_dir): ...  # crea subdirs, devuelve rutas absolutas
 def route_artifact(paths, root_id): ...
 def figure_artifact(paths, root_id): ...
 def dense_artifact(paths, root_id): ...
 def heatmap_artifact(paths, root_id, res_m, bw_km, kernel): ...
 def write_origin_routes(records, paths, root_id, crs): ...  # -> (path, n_escritas)
-def write_manifest(paths, rows): ...          # atomico, reescribe completo
-def read_manifest(paths): ...                 # -> list[dict]
+def write_manifest(paths, rows): ...  # atomico, reescribe completo
+def read_manifest(paths): ...  # -> list[dict]
+
 
 # lcp/utils.py
-def build_route_record(pixel_path, transform, origin_id, dest_id, cost_total,
-                       origin_layer=None, dest_layer=None): ...
+def build_route_record(
+    pixel_path,
+    transform,
+    origin_id,
+    dest_id,
+    cost_total,
+    origin_layer=None,
+    dest_layer=None,
+):
+    ...
     # las dos columnas de capa se agregan SOLO si no son None (esquema legacy intacto)
 
+
 # lcp/postprocessing.py
-def reconstruct_routes_from_disk(args): ...
+def reconstruct_routes_from_disk(args):
+    ...
     # args[:6] como hoy; args[6] opcional (origin_layer, dest_layer)
     # descarta registros con coste no finito
-def reconstruct_inverted_routes_from_disk(args): ...
+
+
+def reconstruct_inverted_routes_from_disk(args):
+    ...
     # (root_id, root_coords, target_items, cost_scalars, transform, phase1_dir[, layers])
     # MCP desde la fuente: registra origin_id=t_target, dest_id=root, geometria invertida
 ```

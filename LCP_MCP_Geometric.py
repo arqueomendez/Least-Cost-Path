@@ -832,6 +832,23 @@ inverted = False
 paths_out = None
 manifest_rows = []
 
+
+def _estado_raiz(esperados, inalcanzables, escritos):
+    """
+    Manifest state of one MCP root from its expected, unreachable and written pairs.
+
+    'error' = nothing was written although reachable pairs were expected (a
+    Phase-2 worker that died returns an empty list), 'sin_rutas' = every expected
+    pair is unreachable, 'ok' = written + unreachable covers the expectation and
+    'incompleto' = at least one reachable pair was lost.
+    """
+    if escritos == 0:
+        return "error" if esperados - inalcanzables > 0 else "sin_rutas"
+    if escritos + inalcanzables == esperados:
+        return "ok"
+    return "incompleto"
+
+
 try:
     # --- PASO 1: Preparar datos ---
     print("[Paso 1/5] Preparando datos en memoria...")
@@ -939,6 +956,9 @@ try:
             "size": os.path.getsize(MASK_SHAPEFILE_PATH),
             "mtime": int(os.path.getmtime(MASK_SHAPEFILE_PATH)),
         }
+    # S9/M3: EDGE_BUFFER_PX recorta el marco exterior del area navegable, asi que
+    # cambiarlo invalida los tracebacks aunque el raster y los puntos no cambien.
+    _fp_data["edge_buffer_px"] = int(EDGE_BUFFER_PX)
     fingerprint = hashlib.sha256(
         _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -1272,10 +1292,15 @@ try:
                         records, paths_out, root_id, raster_crs
                     )
                     fila["escritos"] = int(escritos)
-                    if fila["escritos"] == esperados:
-                        fila["estado"] = "ok"
-                    elif fila["escritos"]:
-                        fila["estado"] = "incompleto"
+                    # M1/M2: el estado sale del terno (esperados, inalcanzables,
+                    # escritos). Un worker de Fase 2 caido devuelve
+                    # (root_id, []), indistinguible de "no hay rutas": sin esta
+                    # regla se reportaba 'sin_rutas' en vez de 'error', y una
+                    # raiz con parejas legitimamente inalcanzables se degradaba
+                    # a 'incompleto'.
+                    fila["estado"] = _estado_raiz(
+                        esperados, inalcanzables, fila["escritos"]
+                    )
                 except Exception as exc:
                     # S7: una raiz rota no aborta las demas; queda como 'error' y
                     # el reporte final lo declara.
@@ -1304,6 +1329,15 @@ try:
             )
         print(f"  Total de rutas escritas: {n_rutas_escritas}")
         print(f"  Manifiesto: {paths_out['manifest']}")
+        raices_error = [
+            fila["root_id"] for fila in manifest_rows if fila["estado"] == "error"
+        ]
+        if raices_error:
+            print(
+                f"  ERROR: {len(raices_error)} raiz(es) sin ninguna ruta pese a "
+                f"tener pares alcanzables: {raices_error}. Revisa los mensajes "
+                f"'ERROR Fase 2' de arriba."
+            )
         raices_mal = [fila for fila in manifest_rows if fila["estado"] != "ok"]
         if raices_mal:
             detalle = [(fila["root_id"], fila["estado"]) for fila in raices_mal]
@@ -1461,13 +1495,17 @@ try:
             plt.tight_layout()
             return _fig
 
-        _rows_ok = [row for row in _rows if row.get("estado") == "ok"]
+        # M4: una raiz 'incompleto' produce el mapa que puede; solo 'error' y
+        # 'sin_rutas' se omiten (antes se filtraba estado == 'ok').
+        _rows_art = [
+            row for row in _rows if row.get("estado") in ("ok", "incompleto")
+        ]
         print(
             f"  Manifiesto: {len(_rows)} raices "
-            f"({len(_rows_ok)} en estado 'ok')"
+            f"({len(_rows_art)} con rutas escritas: 'ok' o 'incompleto')"
         )
         _n_mapas = 0
-        for _i, _row in enumerate(_rows_ok, start=1):
+        for _i, _row in enumerate(_rows_art, start=1):
             _root = _row.get("root_id")
             _gpkg = _row.get("gpkg") or outputs.route_artifact(_paths, _root)
             if not os.path.exists(_gpkg):
@@ -1501,10 +1539,10 @@ try:
             outputs.write_manifest(_paths, _rows)
             _n_mapas += 1
             print(
-                f"  [mapa {_i}/{len(_rows_ok)}] raiz {_root} "
+                f"  [mapa {_i}/{len(_rows_art)}] raiz {_root} "
                 f"({_origin_label} hacia {_dest_label}): {_png}"
             )
-        print(f"  Mapas por raiz escritos: {_n_mapas}/{len(_rows_ok)}")
+        print(f"  Mapas por raiz escritos: {_n_mapas}/{len(_rows_art)}")
     else:
         if 'routes_gdf' not in globals() or routes_gdf is None or len(routes_gdf) == 0:
             print("routes_gdf no disponible en memoria; cargando desde el GeoPackage...")
@@ -1682,11 +1720,15 @@ if _IS_CROSS_DENSE:
 
     _paths = globals().get("paths_out") or outputs.session_paths(OUTPUT_DIR)
     _rows = outputs.read_manifest(_paths)
-    _rows_ok = [row for row in _rows if row.get("estado") == "ok"]
+    # M4: se densifica toda raiz con rutas escritas ('ok' o 'incompleto').
+    _rows_art = [
+        row for row in _rows if row.get("estado") in ("ok", "incompleto")
+    ]
     print(
-        f"  Manifiesto: {len(_rows)} raices ({len(_rows_ok)} en estado 'ok')"
+        f"  Manifiesto: {len(_rows)} raices "
+        f"({len(_rows_art)} con rutas escritas: 'ok' o 'incompleto')"
     )
-    for _i, _row in enumerate(_rows_ok, start=1):
+    for _i, _row in enumerate(_rows_art, start=1):
         _root = _row.get("root_id")
         _route_path = _row.get("gpkg") or outputs.route_artifact(_paths, _root)
         if not os.path.exists(_route_path):
@@ -1754,7 +1796,7 @@ if _IS_CROSS_DENSE:
         _row["densificado"] = _out_path
         outputs.write_manifest(_paths, _rows)
         print(
-            f"  [dens {_i}/{len(_rows_ok)}] raiz {_root}: "
+            f"  [dens {_i}/{len(_rows_art)}] raiz {_root}: "
             f"{_escritos:,} puntos ({_n_routes:,} rutas) -> {_out_path}"
         )
 else:
@@ -1978,10 +2020,14 @@ if _IS_CROSS_KDE:
 
     _paths = globals().get("paths_out") or outputs.session_paths(OUTPUT_DIR)
     _rows = outputs.read_manifest(_paths)
-    _rows_ok = [row for row in _rows if row.get("estado") == "ok"]
+    # M4: el KDE tambien corre para raices 'incompleto' (tienen puntos
+    # densificados); solo 'error' y 'sin_rutas' se omiten.
+    _rows_art = [
+        row for row in _rows if row.get("estado") in ("ok", "incompleto")
+    ]
     if HEATMAP_ORIGIN_IDS:
         _sel = {str(_x) for _x in HEATMAP_ORIGIN_IDS}
-        _rows_ok = [row for row in _rows_ok if str(row.get("root_id")) in _sel]
+        _rows_art = [row for row in _rows_art if str(row.get("root_id")) in _sel]
         print(f"  HEATMAP_ORIGIN_IDS: limitado a {sorted(_sel)}")
 
     # --- UNA sola grilla para toda la corrida ---
@@ -1996,7 +2042,7 @@ if _IS_CROSS_KDE:
             return None if src.bounds is None else tuple(float(v) for v in src.bounds)
 
     _bounds_por_raiz = {}
-    for _row in _rows_ok:
+    for _row in _rows_art:
         _root = _row.get("root_id")
         _dense = _row.get("densificado") or outputs.dense_artifact(_paths, _root)
         if not os.path.exists(_dense):
@@ -2007,7 +2053,7 @@ if _IS_CROSS_KDE:
             _bounds = None
         if _bounds is not None:
             _bounds_por_raiz[str(_root)] = _bounds
-    _raices = [row for row in _rows_ok if str(row.get("root_id")) in _bounds_por_raiz]
+    _raices = [row for row in _rows_art if str(row.get("root_id")) in _bounds_por_raiz]
 
     if not _raices:
         print("  Sin puntos densificados por raiz: no hay KDE que calcular.")
@@ -2082,8 +2128,14 @@ if _IS_CROSS_KDE:
                 kernel_cache=_KERNEL_FFT_CACHE,
             )
             _h, _w = _hm.shape
+            # B2: heatmap_artifact recibe el bandwidth en km (igual que el
+            # camino legacy y la documentacion), no en metros.
             _tif = outputs.heatmap_artifact(
-                _paths, _root, HEATMAP_RES_M, HEATMAP_BANDWIDTH_M, HEATMAP_KERNEL
+                _paths,
+                _root,
+                HEATMAP_RES_M,
+                HEATMAP_BANDWIDTH_M / 1000,
+                HEATMAP_KERNEL,
             )
             with rasterio.open(
                 _tif,

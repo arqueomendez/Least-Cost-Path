@@ -5,6 +5,8 @@ corridas end-to-end de las celdas 1..6 con dos capas de puntos propias.
 Cells 7..9 no se tocan (las cubre otro spec).
 """
 
+import ast
+import json
 import pathlib
 
 import geopandas as gpd
@@ -131,6 +133,64 @@ def test_parameters_tag_for_papermill():
     # La Celda 3 sigue etiquetada 'parameters' para los overrides de papermill.
     cells = [c for c in NB.cells if c.cell_type == "code"]
     assert "parameters" in cells[2].metadata.get("tags", [])
+
+
+def test_m3_edge_buffer_is_part_of_the_resume_fingerprint():
+    # M3: EDGE_BUFFER_PX recorta el marco exterior del area navegable, asi que
+    # cambiarlo cambia los tracebacks; debe entrar en la huella de RESUME o la
+    # re-ejecucion reutiliza Fase 1 con un area de busqueda distinta.
+    code = _strip_comments(SRC[5])
+    assert '_fp_data["edge_buffer_px"]' in code
+
+
+def test_m1_cell6_derives_state_from_expected_unreachable_and_written():
+    # M1/M2: el estado de cada raiz sale del terno (esperados, inalcanzables,
+    # escritos), no solo de `escritos`; un worker caido (0 escritas con parejas
+    # alcanzables esperadas) es 'error', nunca 'sin_rutas'.
+    code = _strip_comments(SRC[5])
+    assert "_estado_raiz(" in code
+    assert 'fila["estado"] = _estado_raiz(' in code
+    assert 'esperados, inalcanzables, fila["escritos"]' in code
+    # pipeline_ok solo es False cuando alguna raiz quedo en 'error'
+    assert (
+        'pipeline_ok = not any(fila["estado"] == "error" for fila in manifest_rows)'
+        in code
+    )
+    # las raices en error se enumeran de forma explicita en el reporte
+    assert "raices_error" in code
+
+
+def _estado_raiz_from_cell6():
+    """Extrae y compila `_estado_raiz` de la Celda 6 (funcion pura)."""
+    tree = ast.parse(SRC[5])
+    nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_estado_raiz"
+    ]
+    assert nodes, (
+        "la Celda 6 debe definir _estado_raiz(esperados, inalcanzables, escritos)"
+    )
+    namespace = {}
+    exec(ast.get_source_segment(SRC[5], nodes[0]), namespace)
+    return namespace["_estado_raiz"]
+
+
+def test_m1_m2_estado_raiz_maps_the_four_cases():
+    # M1: un worker caido devuelve (root_id, []) y debe reportarse 'error'.
+    # M2: una raiz cuyas unicas parejas ausentes son inalcanzables es 'ok'.
+    estado_raiz = _estado_raiz_from_cell6()
+    # worker caido: nada escrito y habia parejas alcanzables esperadas
+    assert estado_raiz(2, 0, 0) == "error"
+    assert estado_raiz(3, 1, 0) == "error"
+    # solo parejas inalcanzables: no se esperaba ninguna ruta
+    assert estado_raiz(2, 2, 0) == "sin_rutas"
+    # escrito + inalcanzables = esperados: nada se perdio
+    assert estado_raiz(2, 1, 1) == "ok"
+    assert estado_raiz(2, 0, 2) == "ok"
+    # se perdio una pareja alcanzable
+    assert estado_raiz(2, 0, 1) == "incompleto"
+    assert estado_raiz(3, 1, 1) == "incompleto"
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +383,49 @@ def test_e2e_cross_layers_inverted_mirrors_costs(tmp_path):
     assert not list(session.glob("red_completa_unificada.gpkg"))
 
 
+# Dests del escenario M2: el raster lleva una columna nodata que parte la
+# grilla, asi que la fuente 1 (este) es inalcanzable y la fuente 2 (oeste) no.
+BARRIER_DESTS = [(1, 60.5, 40.5), (2, 30.5, 30.5)]
+
+
+def _barrier_fixtures(tmp_path):
+    """Dos capas sobre un raster partido en dos regiones desconectadas."""
+    raster = tmp_path / "cost_barrier.tif"
+    nh.write_barrier_raster(raster, barrier_col=50)
+    origins = tmp_path / "Sitios.shp"
+    dests = tmp_path / "Fuentes.shp"
+    nh.write_points(origins, ORIGINS, crs="EPSG:32719")
+    nh.write_points(dests, BARRIER_DESTS, crs="EPSG:32719")
+    return raster, origins, dests
+
+
+def test_m2_unreachable_only_root_is_ok_and_does_not_warn(tmp_path):
+    # M2: las parejas legitimamente inalcanzables se informan y NO degradan la
+    # corrida. Cada raiz escribe 1 ruta y declara 1 inalcanzable: estado 'ok'
+    # (antes: 'incompleto' + 'la corrida NO es un exito completo').
+    raster, origins, dests = _barrier_fixtures(tmp_path)
+    out, err = _run_cells_1_to_6(
+        tmp_path, raster, origins, dests, "never", "session_unreachable"
+    )
+    assert err is None, err
+
+    rows = _manifest(tmp_path / "session_unreachable")
+    assert len(rows) == 2
+    for row in rows:
+        assert row["esperados"] == "2"
+        assert row["inalcanzables"] == "1"
+        assert row["escritos"] == "1"
+        assert row["estado"] == "ok", row
+
+    # El aviso de inalcanzables sigue saliendo (se informan, no bloquean)...
+    assert "inalcanzables" in out
+    # ...pero la corrida cuenta como exito completo.
+    assert "NO es un exito completo" not in out
+    assert "Todas las raices quedaron en estado 'ok'" in out
+    # sin raices en error, los tracebacks se limpian (pipeline_ok True)
+    assert "Tracebacks de Fase 1 eliminados" in out
+
+
 def test_cell4_rejects_same_pixel_site_and_source(tmp_path):
     raster = tmp_path / "cost.tif"
     _write_flat_raster(raster)
@@ -365,3 +468,33 @@ def test_e2e_cross_layers_requires_both_layer_paths(tmp_path):
     _out, err = nh.run_code(srcs[:4], timeout=300)
     assert err is not None, "cross_layers sin DEST_POINTS_PATH debia fallar"
     assert "requiere definir DEST_POINTS_PATH" in err
+
+
+def test_m3_changing_edge_buffer_recomputes_phase1(tmp_path):
+    # M3 (funcional): dos corridas sobre la MISMA sesion con RESUME=True. Al
+    # cambiar EDGE_BUFFER_PX el area navegable cambia, asi que la huella debe
+    # cambiar y Fase 1 debe recalcularse en vez de reutilizar los tracebacks.
+    raster, origins, dests = _fixtures(tmp_path)
+    session = "session_edge_buffer"
+    fingerprints = []
+    outs = []
+    for edge_buffer in (0, 1):
+        overrides = {"KEEP_PHASE1_FILES = False": "KEEP_PHASE1_FILES = True"}
+        if edge_buffer:
+            overrides["EDGE_BUFFER_PX = 0"] = f"EDGE_BUFFER_PX = {edge_buffer}"
+        srcs = _patched_sources(
+            tmp_path, raster, origins, dests, session, invert="never", **overrides
+        )
+        out, err = nh.run_code([*srcs[:4], srcs[5]], timeout=600)
+        assert err is None, err
+        outs.append(out)
+        meta = json.loads(
+            (tmp_path / session / "phase1_tracebacks" / "phase1_meta.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        fingerprints.append(meta["fingerprint"])
+
+    assert fingerprints[0] != fingerprints[1]
+    assert "RESUME: reutilizando" not in outs[1]
+    assert "Total de orígenes a procesar: 2" in outs[1]
