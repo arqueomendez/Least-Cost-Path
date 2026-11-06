@@ -93,14 +93,15 @@ def reconstruct_inverted_routes_from_disk(args):
 
 ## Tasks
 
-- T1 — S2 — `lcp/planner.py` + `tests/test_planner.py` (RED->GREEN).
-- T2 — S5,S7,S8 — `lcp/outputs.py` + `tests/test_outputs.py`.
-- T3 — S6,S9 — `lcp/utils.py` + `lcp/postprocessing.py` + `tests/test_postprocessing_direction.py`.
-- T4 — S1,S3,S4 — Celdas 3 y 4 del notebook.
-- T5 — S5,S7,S8,S9 — Celda 6 del notebook (plan, escritura por raiz, manifiesto, huella).
-- T6 — S10 — Celdas 7, 8 y 9 del notebook.
-- T7 — S11 — Export regenerado + README + AGENTS + celda markdown.
-- T8 — S12 — Verificacion completa y commits por unidad.
+- T1 — S2 — `c757f83` — `lcp/planner.py` + 15 tests (RED: modulo inexistente; GREEN 15 passed).
+- T2 — S5,S7,S8 — `c971948` — `lcp/outputs.py` + 7 tests (RED: modulo inexistente; GREEN 7 passed).
+- T3 — S6,S9 — `cc2c4b8` — `lcp/utils.py` + `lcp/postprocessing.py` + 6 tests (RED 4 failed -> GREEN; diff legacy byte-identico en costes finitos).
+- T4 — S1,S3,S4 — `f6177f1` — Celdas 1/3/4 del notebook.
+- T5 — S5,S7,S8,S9 — `f6177f1` — Celda 6: plan, huella ampliada, escritura por raiz, manifiesto, reporte por raiz.
+- T6 — S10 — `f6177f1` — Celdas 5/7/8/9 + celda markdown en espanol (Celda 5 tenia un NameError en el modo nuevo, corregido).
+- T7 — S11 — `6f0da75` — README, AGENTS y export regenerado con nbconvert (0 drift).
+- T8 — S12 — `eaef16f`, `049e283` — verificacion: 207 tests, ruff check/format limpios, all_pairs 91/91 y single_origin 13/13 re-ejecutados tras los arreglos, corridas cross_layers directa e invertida (coste por par identico).
+- T9 — verificador independiente (`gentle-ai-verify`, task mw4hnbcr-9-o74k): veredicto PASS en S1-S11, FAIL en S12 por `ruff format --check .`; hallazgos B1, B2, M1-M4 aceptados y corregidos en `049e283` (estados honestos ok/incompleto/sin_rutas/error, `HEATMAP_BANDWIDTH_M/1000`, `EDGE_BUFFER_PX` en la huella, artefactos para raices incompletas, probes del verificador adoptados en `tests/test_cross_layers_verifier.py`).
 
 ## Log
 
@@ -110,3 +111,5 @@ def reconstruct_inverted_routes_from_disk(args):
 - **L4** (verbatim): "Aplica la implementación y, detecta que, cuando las fuentes sean menos que los sitios, se pueda invertir la dirección. También, es importante que el archivo gpkg final tenga una columna que indique la distancia de la ruta y su costo total acumulado."
 - **L5** (decisiones del usuario, verbatim): "Módulo en lcp/ + modo del notebook" · "Capa nueva + columnas de capa" · "Fallar en la Celda 4" · "GPKG por origen + figura por origen" · "También por origen" (Celdas 8 y 9).
 - **L6** (simulacion por modo, evidencia medida): `all_pairs` 3 pares -> 1 escrita (2 inalcanzables); `single_origin` 2 -> 1; `cross_layers` 12 -> 6 (5 inalcanzables + 1 degenerado silencioso). Hallazgos: F1 shortfall indistinguible (start==end -> 1 vertice -> `build_route_record` None); F2 `dest_items` desde la capa equivocada (KeyError 4, ruta a 224 m del destino real); F3 traceback en cero -> ruta falsa de 6 vertices (origen SE del destino); F4 huella de RESUME sin mascara ni segunda capa (2 rutas de 12, sin error); F5 `.tmp` rancio + `mode="a"` duplica filas; GPKG por archivo = 96 KB de overhead. Optimizacion: inversion valida en coste (34.1421 == 34.1421) pero geometria no bit-identica (31 vs 31 vertices, empates); coste de Fase 1 lo manda el area explorada (1 destino cerca 363 celdas / 1.0 ms vs 180 destinos 359657 celdas / 109.9 ms); `world_to_pixel` == `rowcol` en 2000/2000.
+- **L7** (entrega): rama `feature/cross-layer-mode`, 7 commits. Suite 207 passed, `ruff check .` y `ruff format --check .` limpios (47 archivos). Regresion legacy re-ejecutada despues de los arreglos: `all_pairs` 91/91 y `single_origin` (origen 7) 13/13, ambos exit 0. `cross_layers` directo e invertido: mismos 6 pares con coste por par identico (<=1e-13), ids siempre sitio->fuente, artefactos por raiz y manifiesto honesto ante un worker caido.
+- **L8** (compuerta RDD, solo lectura): ASSESS sobre `LCP_MCP_Geometric..HEAD` -> `nativeRisk: high`, `reviewDue: true` (senal `process_boundary` en el export generado, 17 paths, 6870 lineas). El START nativo de esta candidata resolvio `consent-declined-this-candidate` (sin binding que relatar y sin mutacion): la revision nativa queda declinada para esta candidata, ligada a su `target_identity`. La cobertura la aporta el verificador independiente de T9 y la evidencia de T8. Para revisarla nativamente hace falta una candidata nueva (nuevo commit).
