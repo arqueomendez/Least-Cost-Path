@@ -193,3 +193,51 @@ def test_select_point_fid_ambiguity_rejected():
         dl.select_point(exploded, "fid", 3)
     # Un fid con un solo nodo sigue funcionando.
     assert dl.select_point(exploded, "fid", 4)["id"] == 9
+
+
+# ---------------------------------------------------------------------------
+# Follow-ups del ciclo de revision (F1): normalizacion y rama fid
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_bool_matches_string_form():
+    # R2-4/R3-3: un booleano True y el texto 'True'/'true' comparten clave.
+    assert dl._normalize_value(True) == dl._normalize_value("true")
+    assert dl._normalize_value(True) == dl._normalize_value("True")
+    assert dl._normalize_value(False) == dl._normalize_value("false")
+
+
+def test_normalize_none_is_its_own_key():
+    # R4-null-string-silent-match: un atributo NULL no debe hacer match con el
+    # texto literal 'None'/'none' ni con ningun otro valor.
+    assert dl._normalize_value(None) != dl._normalize_value("None")
+    assert dl._normalize_value(None) != dl._normalize_value("none")
+
+
+def test_normalize_exact_integers_beyond_float_precision():
+    # R4-float-precision-ids: los enteros se rutean sin pasar por float();
+    # ids por encima de 2^53 conservan todos sus digitos y no colisionan.
+    a = 10**18
+    b = 10**18 + 1
+    assert dl._normalize_value(a) != dl._normalize_value(b)
+    # Garantia: int y su forma textual comparten clave exacta (sin float()).
+    assert dl._normalize_value(a) == dl._normalize_value(str(a))
+    assert dl._normalize_value(b) == dl._normalize_value(str(b))
+    # Borde documentado: por encima de 2^53 la forma float NO es exacta
+    # (precision inherente de float) y no se garantiza equivalencia.
+
+
+def test_select_point_fid_tolerant_to_type_and_actionable_errors():
+    # R2-5/R3-2/R4-fid-int-conversion: la rama fid comparte la tolerancia de
+    # tipos ('7', 7, 7.0 equivalen) y errores accionables; 7.9 no se trunca.
+    candidates = [
+        {"id": 1, "fid": 7, "coords": (1.0, 1.0), "properties": {"id": 1}},
+        {"id": 2, "fid": 8, "coords": (2.0, 2.0), "properties": {"id": 2}},
+    ]
+    assert dl.select_point(candidates, "fid", "7")["id"] == 1
+    assert dl.select_point(candidates, "fid", 7.0)["id"] == 1
+    assert dl.select_point(candidates, "fid", "7.0")["id"] == 1
+    # 7.9 no es un fid valido: no se trunca silenciosamente a 7 y el error
+    # es accionable (lista los fids disponibles).
+    with pytest.raises(ValueError, match="fids disponibles"):
+        dl.select_point(candidates, "fid", 7.9)

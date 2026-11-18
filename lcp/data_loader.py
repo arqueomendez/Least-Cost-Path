@@ -182,18 +182,34 @@ def load_points_as_dict(shapefile_path, id_field):
 
 
 def _normalize_value(value):
-    """Normalizes a selector value for type-tolerant comparison (S2)."""
+    """Normalizes a selector value for type-tolerant comparison (S2).
+
+    Reglas: None es su propia clave (nunca coincide con el texto 'None');
+    los booleanos comparten clave con su texto ('True'/'true'); los enteros
+    (int, str o float entero) se conservan sin pasar por float() para no
+    perder digitos por encima de 2^53; el resto se parsea como numero (.17g)
+    o se compara como texto en minusculas.
+    """
+    if value is None:
+        return "\0null"
     if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int):
+        # Exacto por construccion: sin conversion a float.
         return str(value)
     text = str(value).strip()
+    try:
+        # Un texto de entero ("1234567", "1000000000000000000") se conserva
+        # exacto: int() antes que float() evita la degradacion de precision.
+        return str(int(text))
+    except ValueError:
+        pass
     try:
         num = float(text)
     except ValueError:
         return text.lower()
-    # Una sola rama numerica para TODOS los tipos (int/float/str): los enteros
-    # se conservan exactos (2, 2.0 y "2" -> "2"; ids de 7+ digitos intactos)
-    # y los no enteros usan .17g, que no recorta digitos significativos.
-    if num.is_integer():
+    if num.is_integer() and abs(num) < 2**53:
+        # Entero representable con exactitud en float (2, 2.0 y "2" -> "2").
         return str(int(num))
     return f"{num:.17g}"
 
@@ -233,6 +249,15 @@ def load_point_candidates(path, id_field="id"):
                     f"El campo de ID especificado '{id_field}' no se encuentra "
                     "en las propiedades."
                 )
+            if use_fid:
+                # Mismo aviso de compatibilidad que load_points_as_dict: el
+                # preview nunca debe presentar fids como si fueran ids del
+                # atributo sin advertirlo (R2-3/R3-6).
+                print(
+                    f"  ADVERTENCIA: Campo '{id_field}' no encontrado en "
+                    "propiedades. El preview usa el 'feature.id' (fid) como "
+                    "identificador."
+                )
             base_id = int(base_id)
             for node_id, coords in _split_point_geometry(geom, base_id):
                 candidates.append(
@@ -260,11 +285,24 @@ def select_point(candidates, field, value):
         raise ValueError("La lista de candidatos de puntos esta vacia.")
 
     if field == "fid":
-        matches = [c for c in candidates if c["fid"] == int(value)]
+        # Tolerancia de tipos compartida con la rama de atributos: '7', 7 y
+        # 7.0 equivalen; un no-entero (7.9) NO se trunca silenciosamente.
+        try:
+            wanted_fid = float(value)
+        except (TypeError, ValueError):
+            wanted_fid = None
+        if wanted_fid is None or not float(wanted_fid).is_integer():
+            fids = sorted(c["fid"] for c in candidates)
+            raise ValueError(
+                f"El valor {value!r} no es un fid valido (entero). "
+                f"fids disponibles: {fids}"
+            )
+        wanted_fid = int(wanted_fid)
+        matches = [c for c in candidates if c["fid"] == wanted_fid]
         if not matches:
             fids = sorted(c["fid"] for c in candidates)
             raise ValueError(
-                f"No hay ningun punto con fid {value!r}. fids disponibles: {fids}"
+                f"No hay ningun punto con fid {wanted_fid!r}. fids disponibles: {fids}"
             )
         if len(matches) > 1:
             # Misma regla de unicidad que la rama de atributos: una feature
