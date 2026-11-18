@@ -34,13 +34,15 @@ def select_point(candidates, field, value):
 
 ## Tasks
 
-- T1 — S2,S3,S5 — pending — selector estricto (`load_point_candidates` + `select_point`) en `lcp/data_loader.py` y modo `od_pair` en `lcp/planner.py`; tests RED primero (`tests/test_od_pair.py`).
-- T2 — S1,S4,S6 — pending — Celdas 3/4/6 del notebook con `od_pair` (parametros, preview, un solo task F1/F2 sin dedup) + pins estructurales en `tests/test_od_pair_notebook.py`.
-- T3 — S7 — pending — docs (README, AGENTS, celda markdown, CHANGELOG) y export regenerado.
-- T4 — S8 — pending — verificacion completa (suite, ruff, corrida funcional, regresion 91/13).
+- T1 — S2,S3,S5 — done (commit b5e4fe7) — selector estricto (`load_point_candidates` + `select_point`) en `lcp/data_loader.py` y modo `od_pair` en `lcp/planner.py`; tests RED primero (`tests/test_od_pair.py`).
+- T2 — S1,S4,S6 — done (commit 20b2adc; 16 tests: 11 pins + 5 e2e) — Celdas 3/4/6 del notebook con `od_pair` (parametros, preview, un solo task F1/F2 sin dedup) + pins estructurales en `tests/test_od_pair_notebook.py`.
+- T3 — S7 — done (commit 590443a) — docs (README, AGENTS, celda markdown, CHANGELOG) y export regenerado.
+- T4 — S8 — done — verificacion: `pytest tests/` 238 passed (era 207; +31), `ruff check .` limpio, `ruff format --check` limpio. Corrida funcional od_pair sobre data/ real: 1 ruta (id 7 -> id 3, cost=2786.1, length=19800.6 m, 598 vertices), eco con fid real (id 7 -> fid 6: demuestra la confusion id/fid resuelta). Regresion legacy: all_pairs = 91 OK, single_origin = 13 OK. verificacion completa (suite, ruff, corrida funcional, regresion 91/13).
 
 ## Log
 
 - L1 (peticion original, verbatim): "Lo que necesito es incorporar una nueva funcionalidad donde se puede seleccionar via id u otro atributo un unico punto de inicio y un uno punto de destino. Es importante que justamente este proceso no lance fallos o tenga una mejor forma de seleccionar esto, ya que ha causado problemas previamente con id vs fid"
 - L2 (decision del usuario): modo nuevo "od_pair" (opcion 1) + "Selector interactivo con preview" (opcion 3 de seleccion).
 - L3: hallazgo de exploracion: `load_points_as_dict` hoy hace fallback silencioso a `feature.id` (fid) cuando el campo no esta en las propiedades (solo con aviso impreso); en modos legacy se conserva (regresion), pero el selector nuevo de od_pair nunca cae en ese fallback.
+
+- L4 (verificacion T4): corrida real evidencio la confusion historica: seleccionar id 7 resolvio al feature con fid 6 (ids de atributo desfasados respecto del fid del shapefile). El selector estricto + eco de ambos elimina la ambiguedad.
