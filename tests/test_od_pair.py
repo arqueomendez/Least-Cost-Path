@@ -155,3 +155,25 @@ def test_select_point_large_numeric_ids_do_not_collide():
     # El valor pedido que NO existe sigue abortando (sin vecino cercano falso).
     with pytest.raises(ValueError):
         dl.select_point(large, "id", 1234569)
+
+
+def test_select_point_int_and_string_forms_equivalent():
+    # REG-1: int, float y str del mismo valor logico comparten clave de
+    # normalizacion, incluidos ids de 7+ digitos (una sola rama numerica).
+    large = [
+        {
+            "id": 1234567,
+            "fid": 0,
+            "coords": (1.0, 1.0),
+            "properties": {"id": "1234567"},
+        },
+        {
+            "id": 1234568,
+            "fid": 1,
+            "coords": (2.0, 2.0),
+            "properties": {"id": "1234568"},
+        },
+    ]
+    assert dl.select_point(large, "id", 1234567)["id"] == 1234567
+    assert dl.select_point(large, "id", "1234568")["id"] == 1234568
+    assert dl.select_point(large, "id", 1234568.0)["id"] == 1234568

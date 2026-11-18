@@ -185,15 +185,17 @@ def _normalize_value(value):
     """Normalizes a selector value for type-tolerant comparison (S2)."""
     if isinstance(value, bool):
         return str(value)
-    if isinstance(value, (int, float)):
-        # 2, 2.0 y "2" representan el mismo valor de seleccion; .17g conserva
-        # TODOS los digitos significativos (ids de 7+ digitos no colisionan).
-        return f"{float(value):.17g}"
     text = str(value).strip()
     try:
-        return f"{float(text):g}"
+        num = float(text)
     except ValueError:
         return text.lower()
+    # Una sola rama numerica para TODOS los tipos (int/float/str): los enteros
+    # se conservan exactos (2, 2.0 y "2" -> "2"; ids de 7+ digitos intactos)
+    # y los no enteros usan .17g, que no recorta digitos significativos.
+    if num.is_integer():
+        return str(int(num))
+    return f"{num:.17g}"
 
 
 def load_point_candidates(path, id_field="id"):
