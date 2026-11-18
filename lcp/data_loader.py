@@ -266,6 +266,16 @@ def select_point(candidates, field, value):
             raise ValueError(
                 f"No hay ningun punto con fid {value!r}. fids disponibles: {fids}"
             )
+        if len(matches) > 1:
+            # Misma regla de unicidad que la rama de atributos: una feature
+            # MultiPoint explota en varios nodos con el MISMO fid, y devolver
+            # el primero en silencio recriaria la confusion id vs fid.
+            matched_ids = sorted(c["id"] for c in matches)
+            raise ValueError(
+                f"El fid {value!r} corresponde a {len(matches)} nodos "
+                f"(ids {matched_ids}): la seleccion debe ser unica. Refina el "
+                "criterio con el campo id u otro atributo."
+            )
         return matches[0]
 
     available_fields = sorted({key for c in candidates for key in c["properties"]})

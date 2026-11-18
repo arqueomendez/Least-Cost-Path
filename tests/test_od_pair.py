@@ -177,3 +177,19 @@ def test_select_point_int_and_string_forms_equivalent():
     assert dl.select_point(large, "id", 1234567)["id"] == 1234567
     assert dl.select_point(large, "id", "1234568")["id"] == 1234568
     assert dl.select_point(large, "id", 1234568.0)["id"] == 1234568
+
+
+def test_select_point_fid_ambiguity_rejected():
+    # R2-1: una feature MultiPoint explota en varios nodos con el MISMO fid;
+    # la rama fid debe exigir unicidad como la rama de atributos, nunca
+    # devolver el primero en silencio.
+    exploded = [
+        {"id": 7, "fid": 3, "coords": (1.0, 1.0), "properties": {"id": 7}},
+        {"id": 7001, "fid": 3, "coords": (2.0, 2.0), "properties": {"id": 7}},
+        {"id": 7002, "fid": 3, "coords": (3.0, 3.0), "properties": {"id": 7}},
+        {"id": 9, "fid": 4, "coords": (4.0, 4.0), "properties": {"id": 9}},
+    ]
+    with pytest.raises(ValueError, match="debe ser unica"):
+        dl.select_point(exploded, "fid", 3)
+    # Un fid con un solo nodo sigue funcionando.
+    assert dl.select_point(exploded, "fid", 4)["id"] == 9
