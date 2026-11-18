@@ -181,6 +181,125 @@ def load_points_as_dict(shapefile_path, id_field):
     return points, crs
 
 
+def _normalize_value(value):
+    """Normalizes a selector value for type-tolerant comparison (S2)."""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        # 2, 2.0 y "2" representan el mismo valor de seleccion.
+        return f"{float(value):g}"
+    text = str(value).strip()
+    try:
+        return f"{float(text):g}"
+    except ValueError:
+        return text.lower()
+
+
+def load_point_candidates(path, id_field="id"):
+    """
+    Loads every point feature as a candidate dict for preview/selection.
+
+    Devuelve una lista de ``{id, fid, coords, properties}`` ordenada por id,
+    donde ``id`` sigue la misma regla de explosion MultiPoint de
+    ``load_points_as_dict`` (ids derivados ``original*1000+j``) y ``fid`` es
+    el feature.id real del archivo. Pensado para el preview de la Celda 4 y
+    para ``select_point``: nunca adivina ni filtra.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"El archivo de puntos no se encontró en la ruta: {path}"
+        )
+    candidates = []
+    with fiona.open(path, "r") as c:
+        if len(c) == 0:
+            raise ValueError(
+                f"El archivo de puntos '{os.path.basename(path)}' está vacío."
+            )
+        for feature in c:
+            props = dict(_get_properties(feature))
+            fid = int(_get_id(feature))
+            geom = shape(_get_geometry(feature))
+            # El id de cada nodo sigue la regla de explosion del loader
+            # principal: Point/MultiPoint de 1 parte -> id del atributo
+            # (o fid si el campo no existe, mismo fallback de compatibilidad);
+            # MultiPoint de k partes -> ids derivados.
+            use_fid = id_field not in props and id_field.lower() in ["fid", "id"]
+            base_id = fid if use_fid else props.get(id_field)
+            if base_id is None:
+                raise KeyError(
+                    f"El campo de ID especificado '{id_field}' no se encuentra "
+                    "en las propiedades."
+                )
+            base_id = int(base_id)
+            for node_id, coords in _split_point_geometry(geom, base_id):
+                candidates.append(
+                    {
+                        "id": node_id,
+                        "fid": fid,
+                        "coords": coords,
+                        "properties": props,
+                    }
+                )
+    candidates.sort(key=lambda cand: cand["id"])
+    return candidates
+
+
+def select_point(candidates, field, value):
+    """
+    Selects ONE candidate by attribute value; strict, never falls back to fid.
+
+    ``candidates`` es la lista de ``load_point_candidates``. La comparacion es
+    tolerante a tipo (int/float/str normalizados, S2). Campo inexistente o
+    valor no encontrado -> ValueError con las opciones disponibles; el fid
+    solo se usa si el usuario pide explicitamente ``field='fid'``.
+    """
+    if not candidates:
+        raise ValueError("La lista de candidatos de puntos esta vacia.")
+
+    if field == "fid":
+        matches = [c for c in candidates if c["fid"] == int(value)]
+        if not matches:
+            fids = sorted(c["fid"] for c in candidates)
+            raise ValueError(
+                f"No hay ningun punto con fid {value!r}. fids disponibles: {fids}"
+            )
+        return matches[0]
+
+    available_fields = sorted({key for c in candidates for key in c["properties"]})
+    if field not in available_fields:
+        raise ValueError(
+            f"El campo '{field}' no existe en la capa de puntos. "
+            f"Campos disponibles: {available_fields}. "
+            "ATENCION: el 'fid' no es un atributo; si queres seleccionar por "
+            "fid usa explicitamente field='fid'."
+        )
+
+    target = _normalize_value(value)
+    matches = [
+        c for c in candidates if _normalize_value(c["properties"].get(field)) == target
+    ]
+    if not matches:
+        available_values = sorted(
+            {
+                str(c["properties"].get(field))
+                for c in candidates
+                if c["properties"].get(field) is not None
+            }
+        )
+        raise ValueError(
+            f"Ningun punto tiene {field}={value!r}. "
+            f"Valores disponibles de '{field}': {available_values}."
+        )
+    if len(matches) > 1:
+        matched_ids = sorted(c["id"] for c in matches)
+        raise ValueError(
+            f"El valor {field}={value!r} corresponde a {len(matches)} puntos "
+            f"(ids {matched_ids}): la seleccion debe ser unica. Refina el "
+            "criterio (ej. otro campo) o usa el id exacto."
+        )
+    return matches[0]
+
+
 def load_mask_geometry(shapefile_path):
     """Loads and unifies the geometry of a mask polygon file."""
     if not shapefile_path or not os.path.exists(shapefile_path):

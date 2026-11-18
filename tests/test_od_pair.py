@@ -1,0 +1,143 @@
+import pytest
+
+import lcp.data_loader as dl
+import lcp.planner as planner
+
+# Capa de una sola capa con ids 1..N (los ids del ráster de ejemplo son 1..14).
+ORIGINS_4 = {1: (0.0, 0.0), 2: (10.0, 0.0), 3: (20.0, 0.0), 4: (30.0, 0.0)}
+
+
+# ---------------------------------------------------------------------------
+# Planner: modo od_pair (S5)
+# ---------------------------------------------------------------------------
+
+
+def test_od_pair_plan_single_route():
+    plan = planner.build_pair_plan("od_pair", ORIGINS_4, origin_id=2, dest_id=4)
+    assert plan["mode"] == "od_pair"
+    assert plan["inverted"] is False
+    assert plan["n_expected"] == 1
+    assert list(plan["roots"]) == [2]
+    assert list(plan["roots"][2]) == [4]
+    assert plan["roots"][2][4] == ORIGINS_4[4]
+
+
+def test_od_pair_plan_accepts_origin_id_greater_than_dest_id():
+    # Sin dedup `did > origin_id`: el par pedido se calcula tal cual (S6).
+    plan = planner.build_pair_plan("od_pair", ORIGINS_4, origin_id=4, dest_id=1)
+    assert plan["n_expected"] == 1
+    assert list(plan["roots"]) == [4]
+    assert list(plan["roots"][4]) == [1]
+
+
+def test_od_pair_missing_origin_id_lists_available_ids():
+    with pytest.raises(ValueError, match="IDs disponibles"):
+        planner.build_pair_plan("od_pair", ORIGINS_4, origin_id=99, dest_id=2)
+
+
+def test_od_pair_missing_dest_id_lists_available_ids():
+    with pytest.raises(ValueError, match="IDs disponibles"):
+        planner.build_pair_plan("od_pair", ORIGINS_4, origin_id=1, dest_id=99)
+
+
+def test_od_pair_origin_equals_dest_rejected():
+    with pytest.raises(ValueError):
+        planner.build_pair_plan("od_pair", ORIGINS_4, origin_id=3, dest_id=3)
+
+
+def test_od_pair_requires_both_ids():
+    with pytest.raises(ValueError):
+        planner.build_pair_plan("od_pair", ORIGINS_4, origin_id=1)
+    with pytest.raises(ValueError):
+        planner.build_pair_plan("od_pair", ORIGINS_4, dest_id=1)
+
+
+def test_od_pair_mode_registered():
+    assert "od_pair" in planner.MODES
+
+
+# ---------------------------------------------------------------------------
+# Selector estricto de puntos (S2, S3)
+# ---------------------------------------------------------------------------
+
+CANDIDATES = [
+    {"id": 1, "fid": 0, "coords": (10.0, 20.0), "properties": {"id": 1, "nombre": "a"}},
+    {"id": 2, "fid": 1, "coords": (30.0, 40.0), "properties": {"id": 2, "nombre": "b"}},
+    {
+        "id": 7001,
+        "fid": 2,
+        "coords": (50.0, 60.0),
+        "properties": {"id": 7, "nombre": "c"},
+    },
+]
+
+
+def test_select_point_by_id_field():
+    point = dl.select_point(CANDIDATES, "id", 2)
+    assert point["id"] == 2
+    assert point["fid"] == 1
+
+
+def test_select_point_by_other_field_string_value():
+    point = dl.select_point(CANDIDATES, "nombre", "c")
+    assert point["id"] == 7001
+
+
+def test_select_point_value_tolerant_to_type():
+    # El valor puede llegar como texto ("2") aunque el atributo sea entero.
+    assert dl.select_point(CANDIDATES, "id", "2")["id"] == 2
+    assert dl.select_point(CANDIDATES, "id", 2.0)["id"] == 2
+
+
+def test_select_point_unknown_field_raises_with_available_fields():
+    with pytest.raises(ValueError, match="nombre_no_existe"):
+        dl.select_point(CANDIDATES, "nombre_no_existe", 1)
+    # El mensaje lista los campos disponibles.
+    with pytest.raises(ValueError, match="'id'"):
+        dl.select_point(CANDIDATES, "nombre_no_existe", 1)
+
+
+def test_select_point_unknown_value_raises_with_available_values():
+    with pytest.raises(ValueError, match="valor_no_existe"):
+        dl.select_point(CANDIDATES, "id", "valor_no_existe")
+
+
+def test_select_point_never_falls_back_to_fid():
+    # El fid nunca se usa como campo implicito: solo si se pide explicitamente.
+    with pytest.raises(ValueError):
+        dl.select_point(CANDIDATES, "fid_no_existe", 0)
+
+
+def test_select_point_explicit_fid_field_allowed():
+    point = dl.select_point(CANDIDATES, "fid", 1)
+    assert point["id"] == 2
+
+
+def test_load_point_candidates_lists_id_fid_and_properties(tmp_path):
+    # Fixture shapefile minimo con dos puntos y atributo 'id'.
+    fiona = pytest.importorskip("fiona")
+    from shapely.geometry import Point, mapping
+
+    schema = {"geometry": "Point", "properties": {"id": "int"}}
+    path = str(tmp_path / "points.shp")
+    with fiona.open(path, "w", driver="ESRI Shapefile", schema=schema) as dst:
+        dst.write(
+            {
+                "geometry": mapping(Point(0.0, 0.0)),
+                "properties": {"id": 1},
+            }
+        )
+        dst.write(
+            {
+                "geometry": mapping(Point(10.0, 0.0)),
+                "properties": {"id": 2},
+            }
+        )
+
+    candidates = dl.load_point_candidates(path, "id")
+    assert len(candidates) == 2
+    by_id = {c["id"]: c for c in candidates}
+    assert by_id[1]["fid"] == 0
+    assert by_id[2]["fid"] == 1
+    assert by_id[1]["coords"] == (0.0, 0.0)
+    assert by_id[1]["properties"]["id"] == 1

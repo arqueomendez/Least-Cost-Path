@@ -9,7 +9,7 @@ capa trabajan siempre sobre `origins`; `dests` solo tiene sentido en
 `cross_layers`.
 """
 
-MODES = ("all_pairs", "single_origin", "cross_layers")
+MODES = ("all_pairs", "single_origin", "cross_layers", "od_pair")
 INVERT_POLICIES = ("auto", "never", "always")
 
 
@@ -96,7 +96,47 @@ def _cross_layer_plan(origins, dests, invert):
     return roots, inverted, len(origin_ids) * len(dest_ids)
 
 
-def build_pair_plan(mode, origins, dests=None, origin_id=None, invert="never"):
+def _od_pair_plan(origins, origin_id, dest_id):
+    """
+    Builds the single origin->dest plan for the od_pair mode.
+
+    Sin dedup ni filtros: exactamente el par pedido, incluso con
+    origin_id > dest_id (a diferencia del triangulo superior de all_pairs).
+    """
+    ids = sorted(origins)
+    if origin_id is None:
+        raise ValueError(
+            "El modo 'od_pair' requiere origin_id (punto de inicio). "
+            f"IDs disponibles: {ids}"
+        )
+    if dest_id is None:
+        raise ValueError(
+            "El modo 'od_pair' requiere dest_id (punto de destino). "
+            f"IDs disponibles: {ids}"
+        )
+    if origin_id not in origins:
+        raise ValueError(
+            f"origin_id {origin_id!r} no existe en la capa de puntos. "
+            f"IDs disponibles: {ids}"
+        )
+    if dest_id not in origins:
+        raise ValueError(
+            f"dest_id {dest_id!r} no existe en la capa de puntos. "
+            f"IDs disponibles: {ids}"
+        )
+    if origin_id == dest_id:
+        raise ValueError(
+            f"El origen y el destino son el mismo punto (id {origin_id!r}): "
+            "no hay ruta que calcular. Elegi dos puntos distintos (podes ver "
+            "los candidatos con el preview de la Celda 4)."
+        )
+    roots = {origin_id: {dest_id: tuple(origins[dest_id])}}
+    return roots, 1
+
+
+def build_pair_plan(
+    mode, origins, dests=None, origin_id=None, invert="never", dest_id=None
+):
     """
     Builds the per-root plan for an analysis mode.
 
@@ -116,6 +156,10 @@ def build_pair_plan(mode, origins, dests=None, origin_id=None, invert="never"):
                 "(DEST_POINTS_PATH): no se planifican pares dentro de una misma capa"
             )
         roots, inverted, n_expected = _cross_layer_plan(origins, dests, invert)
+    elif mode == "od_pair":
+        # Una sola ruta dentro de la misma capa; `dests` no aplica.
+        roots, n_expected = _od_pair_plan(origins, origin_id, dest_id)
+        inverted = False
     else:
         # Los modos legacy no tienen segunda capa ni direccion invertible.
         roots, n_expected = _single_layer_plan(mode, origins, origin_id)
