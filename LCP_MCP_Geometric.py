@@ -1028,16 +1028,14 @@ try:
         # Una sola ruta: la raiz MCP es el origen elegido y el unico target es
         # el destino elegido. Sin dedup did > origin_id: el par pedido tal cual
         # (incluye origin_id > dest_id). El task unico se agrega en la cadena
-        # de tasks de abajo.
+        # de tasks de abajo; los pixeles comparten el comprehension de abajo.
         plan = planner.build_pair_plan(
             "od_pair", all_points, origin_id=OD_ORIGIN_ID, dest_id=OD_DEST_ID
         )
         n_expected = plan["n_expected"]
-        dest_pixels_all = {
-            pid: proc.world_to_pixel(transform, coords[0], coords[1])
-            for pid, coords in all_points.items()
-        }
-    else:
+    # od_pair y all_pairs comparten los pixeles de los puntos de la capa unica:
+    # un solo comprehension para ambos modos (edicion en un solo lugar).
+    if ANALYSIS_MODE in ("od_pair", "all_pairs"):
         dest_pixels_all = {
             pid: proc.world_to_pixel(transform, coords[0], coords[1])
             for pid, coords in all_points.items()
