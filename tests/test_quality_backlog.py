@@ -130,9 +130,11 @@ def test_s9_resume_wiring():
 
 def test_s10_markdown_before_every_code_cell():
     # S10: cada celda de codigo tiene su celda markdown explicativa en espanol
-    # justo antes (incluye la de modos antes de la Celda 3).
+    # justo antes (incluye la de modos antes de la Celda 3). Los modos suman
+    # celdas markdown extra consecutivas (una por modo documentado: modos,
+    # cross_layers, od_pair), asi que el invariant estricto es la ADYACENCIA.
     types = [c.cell_type for c in NB.cells]
-    assert types.count("markdown") == types.count("code") + 1
+    assert types.count("markdown") >= types.count("code") + 1
     assert types.count("code") == 9
     for i, t in enumerate(types):
         if t == "code":

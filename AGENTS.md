@@ -90,6 +90,8 @@ Existe una suite de **pytest** en `tests/`:
 | `test_outputs.py` | nombres canónicos de los artefactos por raíz (S5), manifiesto (S7) y escritura atómica por archivo (S8) |
 | `test_postprocessing_direction.py` | columnas `length_m` / `cost_total` y capas de `build_route_record` (S6), reconstrucción directa e invertida, descarte de coste no finito (S9) |
 | `test_cross_layers_notebook.py` | pins de las Celdas 1/3/4/6 del modo `cross_layers` (S1, S3, S4, S5, S7, S8, S9) + corrida end-to-end con dos capas |
+| `test_od_pair.py` | `build_pair_plan` modo `od_pair` (ruta única, sin dedup, `origin_id > dest_id`) y selector estricto `load_point_candidates`/`select_point` (sin fallback a fid) |
+| `test_od_pair_notebook.py` | pins de las Celdas 3/4/6 del modo `od_pair` (S2-S7) + corridas end-to-end: 1 ruta en el GPKG, preview con valores `None`, campo/valor desconocidos |
 | `test_cross_layers_outputs_pins.py` | pins de las Celdas 5/7/8/9 por raíz (S10) y del camino legacy hacia los archivos unificados |
 
 ### Ejecutar los tests
@@ -132,7 +134,10 @@ El notebook principal es `LCP_MCP_Geometric.ipynb`. Ejecuta las celdas en orden
 **Modos de análisis (Celda 3, etiquetada `parameters`)**: `ANALYSIS_MODE` acepta
 `"all_pairs"` (default, N×(N−1)/2), `"single_origin"` + `ORIGIN_ID` (un origen
 hacia todos los demás, sin pares entre destinos — SSSP vs APSP) y
-`"cross_layers"` (dos capas, M×N). Ejecución parametrizada sin editar el
+`"cross_layers"` (dos capas, M×N), `"od_pair"` (una única ruta origen→destino de
+la misma capa, elegidos por campo y valor — `ORIGIN_SELECT_FIELD`/`ORIGIN_SELECT_VALUE`,
+`DEST_SELECT_FIELD`/`DEST_SELECT_VALUE`, sin fallback silencioso al fid y con
+preview de candidatos cuando los valores quedan en `None`). Ejecución parametrizada sin editar el
 notebook:
 
 ```sh
@@ -210,11 +215,11 @@ del notebook automáticamente. La evidencia de cada corrida vive en los
 
 | Archivo | Responsabilidad |
 |---|---|
-| `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`); valida IDs duplicados de puntos y explota `MultiPoint` (ids derivados `id*1000+j`). |
+| `data_loader.py` | Carga raster (`rasterio`), puntos (`fiona`) y máscara vectorial (`shapely`); valida IDs duplicados de puntos y explota `MultiPoint` (ids derivados `id*1000+j`). `load_point_candidates` + `select_point`: selección estricta de UN punto por campo/valor para `od_pair` (nunca cae al fid sin pedido explícito). |
 | `processing.py` | Conversión mundo↔píxel, creación de máscaras raster desde vectores, corredor de búsqueda. |
 | `pathfinder.py` | Motor MCP (`MCP_Geometric`), reconstrucción de traceback con Numba `@njit`, y `compute_and_save_cost_surface()` (worker Fase 1: calcula superficie de coste y guarda traceback comprimido en `.npz`). |
 | `postprocessing.py` | Extrae todas las rutas desde un origen dado (`extract_routes`); aplica deduplicación `dest_id > origin_id`; y `reconstruct_routes_from_disk()` (worker Fase 2: carga traceback desde `.npz` y reconstruye rutas). `reconstruct_inverted_routes_from_disk()` hace lo mismo con la raíz en la capa de destinos y la polilínea invertida. |
-| `planner.py` | Planificador puro (sin E/S) de pares por raíz MCP: `build_pair_plan(mode, origins, dests, origin_id, invert)` para los tres modos y `identical_pixel_pairs()` (pares sitio-fuente en el mismo píxel). |
+| `planner.py` | Planificador puro (sin E/S) de pares por raíz MCP: `build_pair_plan(mode, origins, dests, origin_id, invert, dest_id)` para los cuatro modos y `identical_pixel_pairs()` (pares sitio-fuente en el mismo píxel). |
 | `outputs.py` | Nombres canónicos de los artefactos por raíz (`session_paths`, `route_artifact`, `figure_artifact`, `dense_artifact`, `heatmap_artifact`), `write_origin_routes()` (escritura atómica por archivo) y manifiesto `manifest_rutas_por_origen.csv` (`write_manifest` / `read_manifest`). |
 | `utils.py` | Construye el registro de ruta (`build_route_record`) y guardado legacy a shapefile. |
 | `__init__.py` | Vacío; el paquete se importa con `import lcp.<modulo>`. |

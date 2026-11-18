@@ -5,6 +5,21 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
 
 ## Sin versión — publicado en `origin/LCP_MCP_Geometric` (rama principal)
 
+### od-pair-mode (ruta única origen → destino sin confusión id vs fid)
+
+- **`ANALYSIS_MODE = "od_pair"`**: una sola ruta entre dos puntos de la misma
+  capa; sin dedup (`origin_id > dest_id` se calcula tal cual) y reutilizando el
+  camino legacy (GPKG unificado, mapa, densificado y KDE).
+- **Selector estricto por campo y valor** (`ORIGIN_SELECT_FIELD`/`ORIGIN_SELECT_VALUE`,
+  `DEST_SELECT_FIELD`/`DEST_SELECT_VALUE`): tolerante a tipos (`"7"`, `7`, `7.0`),
+  valor único obligatorio, y **sin fallback silencioso al fid** — el fid solo se
+  usa si se pide explícitamente (`field = "fid"`).
+- **Preview**: con valores `None`, la Celda 4 imprime la tabla de candidatos
+  (`id`, `fid`, coordenadas, píxel) y detiene la ejecución; con valores válidos,
+  eco de la selección resuelta (id, fid real, campo/valor, píxel).
+- Errores accionables: campo inexistente lista los campos disponibles; valor no
+  encontrado lista los valores del campo; origen = destino aborta con mensaje claro.
+
 ### notebook-hardening (robustez del pipeline)
 
 - **Fase 1 fail-hard**: si un worker falla, la ejecución lista los IDs de orígenes

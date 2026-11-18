@@ -12,6 +12,7 @@ La herramienta calcula el conjunto completo de rutas entre todos los pares de pu
 - Reconstrucción del traceback acelerada con Numba JIT (`@njit`).
 - Análisis N×N deduplicado: para N puntos se calculan N×(N-1)/2 rutas únicas (triángulo superior de la matriz OD), evitando recalcular pares simétricos.
 - **Modo `single_origin` (1 contra todos)**: con `ANALYSIS_MODE = "single_origin"` y un `ORIGIN_ID`, solo se calculan las N−1 rutas desde ese origen hacia el resto (estilo SSSP / `source=` de NetworkX), sin pares entre los destinos. Se elige editando la Celda 3 o desde CLI con `papermill -p` (ver sección propia).
+- **Modo `od_pair` (una única ruta origen → destino por campo y valor)**: con `ANALYSIS_MODE = "od_pair"` se calcula **una sola ruta** entre un punto de inicio y un punto de destino de la **misma capa**, elegidos por **campo y valor** (`ORIGIN_SELECT_FIELD`/`ORIGIN_SELECT_VALUE` y `DEST_SELECT_FIELD`/`DEST_SELECT_VALUE`, por defecto el atributo `id`). El selector es **estricto y sin fallback silencioso al fid**: campo inexistente o valor ambiguo abortan listando las opciones disponibles; con los valores en `None` la Celda 4 imprime la **tabla de candidatos** (id, fid, coordenadas y píxel) y detiene la ejecución (ver «Modo od_pair»).
 - **Modo `cross_layers` (una capa de orígenes contra una capa de destinos)**: con `ANALYSIS_MODE = "cross_layers"` se calculan las rutas de **cada** punto de `ORIGIN_POINTS_PATH` hacia **todos** los de `DEST_POINTS_PATH` (M×N), con **una corrida MCP por raíz** y salidas **no unificadas**: un GPKG, un mapa, un densificado y un KDE por raíz, más un manifiesto CSV. Admite invertir la dirección cuando las fuentes son menos que los sitios (ver «Modo cross_layers»).
 - **Ejecución paralela en dos fases con joblib** (`loky` backend): el análisis se divide en Fase 1 (calcular y guardar superficies de coste por origen) y Fase 2 (reconstruir rutas desde disco). El número de workers se auto-detecta según la RAM disponible para cada fase. El ráster se comparte mediante un archivo `memmap` en disco.
 - Permite restringir el área de búsqueda a un polígono vectorial (shapefile o GeoPackage) para excluir zonas no accesibles.
@@ -101,8 +102,9 @@ Parámetros editables por el usuario:
 | `ALL_POINTS_SHAPEFILE` | Shapefile o GeoPackage con todos los puntos de la red                        |
 | `MASK_SHAPEFILE_PATH`  | Polígono de restricción espacial (`None` para desactivar)                   |
 | `ID_FIELD_NAME`        | Nombre del campo ID en la capa de puntos                                     |
-| `ANALYSIS_MODE`        | `"all_pairs"` (default, N×N), `"single_origin"` (un origen → todos los demás) o `"cross_layers"` (capa de orígenes → capa de destinos, M×N) |
+| `ANALYSIS_MODE`        | `"all_pairs"` (default, N×N), `"single_origin"` (un origen → todos los demás), `"cross_layers"` (capa de orígenes → capa de destinos, M×N) o `"od_pair"` (una única ruta origen → destino) |
 | `ORIGIN_ID`            | ID del punto origen; requerido y validado en modo `single_origin`            |
+| `ORIGIN_SELECT_FIELD`, `ORIGIN_SELECT_VALUE`, `DEST_SELECT_FIELD`, `DEST_SELECT_VALUE` | Solo en `od_pair`: campo y valor (número o texto) que identifican el punto de inicio y el de destino dentro de la misma capa; `None` = preview de candidatos y detención |
 | `ORIGIN_POINTS_PATH`, `DEST_POINTS_PATH`, `ORIGIN_ID_FIELD`, `DEST_ID_FIELD`, `INVERT_DIRECTION` | Solo en `cross_layers`: capa de sitios, capa de fuentes, campo id de cada capa y política de inversión de dirección (ver «Modo cross_layers») |
 | `HEATMAP_ORIGIN_IDS`   | Solo en `cross_layers`: `None` = un KDE por cada raíz; lista de ids = solo esas raíces |
 | `OUTPUT_DIR`           | Carpeta de salida (generada automáticamente con marca de tiempo)             |
@@ -415,20 +417,20 @@ Configuración central»).
 
 **Para retomar resultados ya calculados**: corre solo las celdas 8 y 9 — autodetectan la última sesión de `output/` (buscan `red_completa_unificada.gpkg` y `puntos_rutas_<espaciado>m.gpkg`) cuando `OUTPUT_DIR` no apunta a una sesión válida.
 
-## Modos de análisis: all_pairs, single_origin y cross_layers
+## Modos de análisis: all_pairs, single_origin, cross_layers y od_pair
 
-La **Celda 3** (precedida de celdas markdown que explican los tres modos **dentro del propio notebook**) permite elegir entre tres modos de análisis:
+La **Celda 3** (precedida de celdas markdown que explican los cuatro modos **dentro del propio notebook**) permite elegir entre cuatro modos de análisis:
 
-| | `all_pairs` (default) | `single_origin` (estrella / SSSP) | `cross_layers` (dos capas) |
+| | `all_pairs` (default) | `single_origin` (estrella / SSSP) | `cross_layers` (dos capas) | `od_pair` (una ruta) |
 |---|---|---|---|
-| Qué calcula | Todas las rutas entre todos los pares | Solo las rutas desde `ORIGIN_ID` hacia todos los demás; ninguna entre los otros puntos | **Cada** punto de la capa de orígenes hacia **todos** los de la capa de destinos; ningún par dentro de la misma capa |
-| Alcance | 1 capa, todos los pares | 1 capa, 1 origen | 2 capas, M×N |
-| Rutas (ejemplo) | N=14: N·(N−1)/2 = **91** | N=14: N−1 = **13** | 3 sitios × 2 fuentes = **6** |
-| MCPs en Fase 1 | N−1 = 13 (uno por origen) | **1** (solo el origen) | **M** (uno por sitio) o **N** (uno por fuente si se invierte) |
-| Dedup | filtro `did > origin_id` (triángulo superior OD) | `did != ORIGIN_ID` (sin triángulo) | **ninguna**: los ids se repiten entre capas y es legítimo |
-| Salidas | `red_completa_unificada.gpkg` (+ capa `destinos_inalcanzables`) | el mismo GPKG unificado | un GPKG + un PNG + un densificado + un GeoTIFF **por raíz** y `manifest_rutas_por_origen.csv` |
-| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto | Origen y destino son **fenómenos distintos** en capas distintas (sitios → fuentes, casos → hospitales) y cada corrida se revisa o se comparte por separado |
-| Mapas (C5/C7) | todos los puntos en rojo | origen resaltado con estrella lime | un mapa por raíz (orígenes en cian, destinos en amarillo) |
+| Qué calcula | Todas las rutas entre todos los pares | Solo las rutas desde `ORIGIN_ID` hacia todos los demás; ninguna entre los otros puntos | **Cada** punto de la capa de orígenes hacia **todos** los de la capa de destinos; ningún par dentro de la misma capa || **Una única ruta** entre un punto de inicio y un punto de destino de la misma capa |
+| Alcance | 1 capa, todos los pares | 1 capa, 1 origen | 2 capas, M×N || 1 capa, 1 par O→D |
+| Rutas (ejemplo) | N=14: N·(N−1)/2 = **91** | N=14: N−1 = **13** | 3 sitios × 2 fuentes = **6** || siempre **1** |
+| MCPs en Fase 1 | N−1 = 13 (uno por origen) | **1** (solo el origen) | **M** (uno por sitio) o **N** (uno por fuente si se invierte) || **1** |
+| Dedup | filtro `did > origin_id` (triángulo superior OD) | `did != ORIGIN_ID` (sin triángulo) | **ninguna**: los ids se repiten entre capas y es legítimo || **ninguna**: el par pedido se calcula tal cual (incluye `origin_id > dest_id`) |
+| Salidas | `red_completa_unificada.gpkg` (+ capa `destinos_inalcanzables`) | el mismo GPKG unificado | un GPKG + un PNG + un densificado + un GeoTIFF **por raíz** y `manifest_rutas_por_origen.csv` || el mismo GPKG unificado con **1 fila** |
+| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto | Origen y destino son **fenómenos distintos** en capas distintas (sitios → fuentes, casos → hospitales) y cada corrida se revisa o se comparte por separado || **Una conexión puntual**: una sola ruta concretas para inspección, ilustración o control de calidad, elegida por atributo (id, nombre, tipo…) sin editar la capa |
+| Mapas (C5/C7) | todos los puntos en rojo | origen resaltado con estrella lime | un mapa por raíz (orígenes en cian, destinos en amarillo) || todos los puntos en rojo (la ruta es una sola) |
 
 **Concepto**: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O: en modo estrella no se pierde información para ese origen.
 
@@ -448,6 +450,34 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 **Rendimiento**: el modo estrella ejecuta 1 MCP en vez de N−1 (con los datos de ejemplo, Fase 1 de ~1,9 s a ~0,2 s y un solo worker).
 
 **Casos límite**: `N = 1` en modo estrella genera un task degenerado (fuera del dominio previsto); los destinos inalcanzables no bloquean pero se informan con sus IDs.
+
+### Modo od_pair
+
+Modo de **una sola ruta**: calcula exactamente el par origen→destino pedido dentro de la **misma capa** (`ALL_POINTS_SHAPEFILE`), reutilizando todo el flujo legacy (GPKG unificado, mapa, densificado, KDE). Pensado para cuando la selección previa por `ORIGIN_ID` causaba confusión entre el **id del atributo** y el **fid** del archivo.
+
+**Selección por campo y valor (Celda 3)**:
+
+| Parámetro | Default | Descripción |
+|---|---|---|
+| `ORIGIN_SELECT_FIELD` / `ORIGIN_SELECT_VALUE` | `"id"` / `None` | Campo y valor del punto de inicio (número o texto; `"7"`, `7` y `7.0` equivalen) |
+| `DEST_SELECT_FIELD` / `DEST_SELECT_VALUE` | `"id"` / `None` | Campo y valor del punto de destino |
+
+**Reglas del selector (sin fallback silencioso)**:
+
+- Si el **campo no existe** → `ValueError` con los **campos disponibles** de la capa. Para usar el fid hay que pedirlo explícitamente (`ORIGIN_SELECT_FIELD = "fid"`); nunca se usa de incognito.
+- Si el **valor no existe** → `ValueError` con los **valores disponibles** de ese campo.
+- Si el valor corresponde a **varios puntos** → `ValueError` pidiendo refinar el criterio (la selección debe ser única).
+- Si el **origen y el destino caen en el mismo punto** → `ValueError` con la selección resuelta.
+- Con los valores en **`None`** → la Celda 4 imprime la **tabla de candidatos** (`id`, `fid`, coordenadas, píxel) y **detiene** la ejecución; nunca elige automáticamente.
+- Con valores válidos → **eco** de la selección resuelta: id elegido, fid real del feature, campo/valor usado y píxel del raster.
+
+```sh
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 7 -p DEST_SELECT_VALUE 3
+# por otro atributo:
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_FIELD nombre -p ORIGIN_SELECT_VALUE "Sitio A" -p DEST_SELECT_FIELD fid -p DEST_SELECT_VALUE 5
+```
+
+**Salida**: el mismo `red_completa_unificada.gpkg` con **1 fila** (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`) — sin dedup: si `origin_id > dest_id` el par se calcula igual. La Celda 6 imprime `MODO: od_pair (origen X -> destino Y) | rutas esperadas: 1`.
 
 ### Modo cross_layers
 
