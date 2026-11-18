@@ -422,15 +422,15 @@ Configuración central»).
 La **Celda 3** (precedida de celdas markdown que explican los cuatro modos **dentro del propio notebook**) permite elegir entre cuatro modos de análisis:
 
 | | `all_pairs` (default) | `single_origin` (estrella / SSSP) | `cross_layers` (dos capas) | `od_pair` (una ruta) |
-|---|---|---|---|
-| Qué calcula | Todas las rutas entre todos los pares | Solo las rutas desde `ORIGIN_ID` hacia todos los demás; ninguna entre los otros puntos | **Cada** punto de la capa de orígenes hacia **todos** los de la capa de destinos; ningún par dentro de la misma capa || **Una única ruta** entre un punto de inicio y un punto de destino de la misma capa |
-| Alcance | 1 capa, todos los pares | 1 capa, 1 origen | 2 capas, M×N || 1 capa, 1 par O→D |
-| Rutas (ejemplo) | N=14: N·(N−1)/2 = **91** | N=14: N−1 = **13** | 3 sitios × 2 fuentes = **6** || siempre **1** |
-| MCPs en Fase 1 | N−1 = 13 (uno por origen) | **1** (solo el origen) | **M** (uno por sitio) o **N** (uno por fuente si se invierte) || **1** |
-| Dedup | filtro `did > origin_id` (triángulo superior OD) | `did != ORIGIN_ID` (sin triángulo) | **ninguna**: los ids se repiten entre capas y es legítimo || **ninguna**: el par pedido se calcula tal cual (incluye `origin_id > dest_id`) |
-| Salidas | `red_completa_unificada.gpkg` (+ capa `destinos_inalcanzables`) | el mismo GPKG unificado | un GPKG + un PNG + un densificado + un GeoTIFF **por raíz** y `manifest_rutas_por_origen.csv` || el mismo GPKG unificado con **1 fila** |
-| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto | Origen y destino son **fenómenos distintos** en capas distintas (sitios → fuentes, casos → hospitales) y cada corrida se revisa o se comparte por separado || **Una conexión puntual**: una sola ruta concretas para inspección, ilustración o control de calidad, elegida por atributo (id, nombre, tipo…) sin editar la capa |
-| Mapas (C5/C7) | todos los puntos en rojo | origen resaltado con estrella lime | un mapa por raíz (orígenes en cian, destinos en amarillo) || todos los puntos en rojo (la ruta es una sola) |
+|---|---|---|---|---|
+| Qué calcula | Todas las rutas entre todos los pares | Solo las rutas desde `ORIGIN_ID` hacia todos los demás; ninguna entre los otros puntos | **Cada** punto de la capa de orígenes hacia **todos** los de la capa de destinos; ningún par dentro de la misma capa | **Una única ruta** entre un punto de inicio y un punto de destino de la misma capa |
+| Alcance | 1 capa, todos los pares | 1 capa, 1 origen | 2 capas, M×N | 1 capa, 1 par O→D |
+| Rutas (ejemplo) | N=14: N·(N−1)/2 = **91** | N=14: N−1 = **13** | 3 sitios × 2 fuentes = **6** | siempre **1** |
+| MCPs en Fase 1 | N−1 = 13 (uno por origen) | **1** (solo el origen) | **M** (uno por sitio) o **N** (uno por fuente si se invierte) | **1** |
+| Dedup | filtro `did > origin_id` (triángulo superior OD) | `did != ORIGIN_ID` (sin triángulo) | **ninguna**: los ids se repiten entre capas y es legítimo | **ninguna**: el par pedido se calcula tal cual (incluye `origin_id > dest_id`) |
+| Salidas | `red_completa_unificada.gpkg` (+ capa `destinos_inalcanzables`) | el mismo GPKG unificado | un GPKG + un PNG + un densificado + un GeoTIFF **por raíz** y `manifest_rutas_por_origen.csv` | el mismo GPKG unificado con **1 fila** |
+| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto | Origen y destino son **fenómenos distintos** en capas distintas (sitios → fuentes, casos → hospitales) y cada corrida se revisa o se comparte por separado | **Una conexión puntual**: una sola ruta concretas para inspección, ilustración o control de calidad, elegida por atributo (id, nombre, tipo…) sin editar la capa |
+| Mapas (C5/C7) | todos los puntos en rojo | origen resaltado con estrella lime | un mapa por raíz (orígenes en cian, destinos en amarillo) | todos los puntos en rojo (la ruta es una sola) |
 
 **Concepto**: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O: en modo estrella no se pierde información para ese origen.
 
