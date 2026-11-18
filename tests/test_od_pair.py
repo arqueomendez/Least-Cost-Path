@@ -141,3 +141,17 @@ def test_load_point_candidates_lists_id_fid_and_properties(tmp_path):
     assert by_id[2]["fid"] == 1
     assert by_id[1]["coords"] == (0.0, 0.0)
     assert by_id[1]["properties"]["id"] == 1
+
+
+def test_select_point_large_numeric_ids_do_not_collide():
+    # R3-1: la normalizacion numerica debe conservar TODOS los digitos
+    # significativos; ids de 7+ digitos no colisionan entre si.
+    large = [
+        {"id": 1234567, "fid": 0, "coords": (1.0, 1.0), "properties": {"id": 1234567}},
+        {"id": 1234568, "fid": 1, "coords": (2.0, 2.0), "properties": {"id": 1234568}},
+    ]
+    assert dl.select_point(large, "id", 1234567)["id"] == 1234567
+    assert dl.select_point(large, "id", 1234568)["id"] == 1234568
+    # El valor pedido que NO existe sigue abortando (sin vecino cercano falso).
+    with pytest.raises(ValueError):
+        dl.select_point(large, "id", 1234569)

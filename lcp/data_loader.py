@@ -186,8 +186,9 @@ def _normalize_value(value):
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, (int, float)):
-        # 2, 2.0 y "2" representan el mismo valor de seleccion.
-        return f"{float(value):g}"
+        # 2, 2.0 y "2" representan el mismo valor de seleccion; .17g conserva
+        # TODOS los digitos significativos (ids de 7+ digitos no colisionan).
+        return f"{float(value):.17g}"
     text = str(value).strip()
     try:
         return f"{float(text):g}"
