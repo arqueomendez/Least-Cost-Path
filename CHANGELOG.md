@@ -20,6 +20,24 @@ Cambios destacados, agrupados por hito. El detalle vive en los commits
 - Errores accionables: campo inexistente lista los campos disponibles; valor no
   encontrado lista los valores del campo; origen = destino aborta con mensaje claro.
 
+### od-pair-mode — follow-ups de la revisión nativa (advisory)
+
+- **`_normalize_value` endurecida**: `None` es su propia clave (nunca coincide
+  con el texto literal `'None'`); booleanos comparten clave con su texto
+  (`True`/`'true'`); los enteros se rutean por `int()` antes que `float()`, así
+  ids por encima de 2^53 conservan todos sus dígitos.
+- **Rama fid con la misma tolerancia de tipos**: `'7'`, `7` y `7.0` equivalen;
+  `7.9` se rechaza con error accionable (nunca se trunca en silencio).
+- **Preview honesto**: `load_point_candidates` emite el mismo aviso de
+  compatibilidad fid que `load_points_as_dict` cuando el campo id no existe.
+- **README**: tabla comparativa de los cuatro modos corregida (separador de 5
+  columnas, sin celdas duplicadas `||`).
+- **Celda 6**: `dest_pixels_all` compartido entre `od_pair` y `all_pairs` (un
+  solo punto de edición); export regenerado.
+- **Test e2e de destino inalcanzable**: barrera de nodata entre origen y
+  destino → 0 rutas, el par queda en `destinos_inalcanzables` con el aviso
+  impreso (nada en silencio).
+
 ### notebook-hardening (robustez del pipeline)
 
 - **Fase 1 fail-hard**: si un worker falla, la ejecución lista los IDs de orígenes

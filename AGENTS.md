@@ -90,8 +90,8 @@ Existe una suite de **pytest** en `tests/`:
 | `test_outputs.py` | nombres canónicos de los artefactos por raíz (S5), manifiesto (S7) y escritura atómica por archivo (S8) |
 | `test_postprocessing_direction.py` | columnas `length_m` / `cost_total` y capas de `build_route_record` (S6), reconstrucción directa e invertida, descarte de coste no finito (S9) |
 | `test_cross_layers_notebook.py` | pins de las Celdas 1/3/4/6 del modo `cross_layers` (S1, S3, S4, S5, S7, S8, S9) + corrida end-to-end con dos capas |
-| `test_od_pair.py` | `build_pair_plan` modo `od_pair` (ruta única, sin dedup, `origin_id > dest_id`) y selector estricto `load_point_candidates`/`select_point` (sin fallback a fid) |
-| `test_od_pair_notebook.py` | pins de las Celdas 3/4/6 del modo `od_pair` (S2-S7) + corridas end-to-end: 1 ruta en el GPKG, preview con valores `None`, campo/valor desconocidos |
+| `test_od_pair.py` | `build_pair_plan` modo `od_pair` (ruta única, sin dedup, `origin_id > dest_id`) y selector estricto `load_point_candidates`/`select_point`: sin fallback a fid, unicidad en ambas ramas, normalización de tipos (bool/texto, None, enteros exactos > 2^53, fid tolerante a tipo) |
+| `test_od_pair_notebook.py` | pins de las Celdas 3/4/6 del modo `od_pair` (S2-S7) + corridas end-to-end: 1 ruta en el GPKG, preview con valores `None`, campo/valor desconocidos, destino inalcanzable tras barrera (0 rutas + capa `destinos_inalcanzables`) |
 | `test_cross_layers_outputs_pins.py` | pins de las Celdas 5/7/8/9 por raíz (S10) y del camino legacy hacia los archivos unificados |
 
 ### Ejecutar los tests

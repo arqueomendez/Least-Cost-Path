@@ -295,9 +295,9 @@ def test_e2e_od_pair_unreachable_destination_reported_not_silent(tmp_path):
         ),
         "MAX_WORKERS_PHASE1 = None": "MAX_WORKERS_PHASE1 = 1",
         'ORIGIN_SELECT_FIELD = "id"': 'ORIGIN_SELECT_FIELD = "nombre"',
-        'ORIGIN_SELECT_VALUE = None': 'ORIGIN_SELECT_VALUE = "oeste"',
+        "ORIGIN_SELECT_VALUE = None": 'ORIGIN_SELECT_VALUE = "oeste"',
         'DEST_SELECT_FIELD = "id"': 'DEST_SELECT_FIELD = "nombre"',
-        'DEST_SELECT_VALUE = None': 'DEST_SELECT_VALUE = "este"',
+        "DEST_SELECT_VALUE = None": 'DEST_SELECT_VALUE = "este"',
     }
     srcs = nh.load_code_sources()
     srcs[2] = nh.patch_cell3(srcs[2], repl)
