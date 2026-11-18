@@ -5,7 +5,7 @@
 # 
 # Carga las librerías del proyecto (rasterio, fiona, geopandas, joblib, matplotlib, psutil) y los módulos del paquete `lcp/` (`data_loader`, `processing`, `pathfinder`, `utils`, `postprocessing`). Si falla esta celda, el entorno no está sincronizado: ejecuta `uv sync`.
 
-# In[1]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -47,7 +47,7 @@ print("Módulos cargados exitosamente.")
 # - `_calculate_n_jobs_for_phase`: estima cuántos workers caben según la RAM disponible (Fase 1 ≈ `raster × 5.5` por worker; Fase 2 ≈ 80 MB; tope de 61 procesos en Windows).
 # - `warm_up_numba`: pre-compila la reconstrucción JIT antes del bucle principal y verifica que los offsets de `MCP_Geometric` sigan siendo los esperados.
 
-# In[2]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -236,7 +236,44 @@ def warm_up_numba():
 # ```
 # 
 
-# In[3]:
+# ## Modo `od_pair`: una ruta origen -> destino elegida por campo y valor
+# 
+# Cuarto modo de analisis. La **Celda 3** lo activa con `ANALYSIS_MODE = "od_pair"` y calcula **una sola ruta** desde un punto de inicio hasta un punto de destino de la **misma capa** (`ALL_POINTS_SHAPEFILE`), reutilizando todo el camino legacy (GPKG unificado, mapa, densificado y KDE).
+# 
+# ### Seleccion sin confusion id vs fid
+# 
+# Cada extremo se elige por **campo y valor** (`ORIGIN_SELECT_FIELD`/`ORIGIN_SELECT_VALUE` y `DEST_SELECT_FIELD`/`DEST_SELECT_VALUE`, por defecto el atributo `id`). El valor acepta numero o texto (`"7"`, `7` y `7.0` equivalen). Reglas duras:
+# 
+# - **Sin fallback silencioso al fid**: si el campo no existe, la validacion aborta listando los campos disponibles. Para seleccionar por fid hay que pedirlo explicitamente (`ORIGIN_SELECT_FIELD = "fid"`).
+# - **Valor unico**: si el valor corresponde a varios puntos, aborta pidiendo refinar el criterio.
+# - **Preview**: si dejas los valores en `None`, la Celda 4 imprime la tabla de candidatos (`id`, `fid`, coordenadas y pixel) y **detiene** la ejecucion; nunca elige por vos.
+# - **Eco**: con valores validos imprime la seleccion resuelta (id, fid real, campo/valor y pixel) antes de calcular.
+# 
+# ### Parametros (Celda 3)
+# 
+# | Parametro | Default | Uso |
+# |---|---|---|
+# | `ANALYSIS_MODE` | `"all_pairs"` | Poner `"od_pair"` para activar el modo. |
+# | `ORIGIN_SELECT_FIELD` / `ORIGIN_SELECT_VALUE` | `"id"` / `None` | Campo y valor del punto de inicio. |
+# | `DEST_SELECT_FIELD` / `DEST_SELECT_VALUE` | `"id"` / `None` | Campo y valor del punto de destino. |
+# 
+# ### CLI (papermill)
+# 
+# ```sh
+# uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 7 -p DEST_SELECT_VALUE 3
+# ```
+# 
+# ### Comparativa de los cuatro modos
+# 
+# | | `all_pairs` | `single_origin` | `cross_layers` | `od_pair` |
+# |---|---|---|---|---|
+# | Pares | N(N-1)/2 | N-1 | M x N | **1** |
+# | Capas | 1 | 1 | 2 (sitios + fuentes) | 1 |
+# | Seleccion | - | `ORIGIN_ID` | dos capas | campo + valor (preview) |
+# | Salidas | GPKG unificado | GPKG unificado | por raiz | GPKG unificado |
+# 
+
+# In[ ]:
 
 
 # ==============================================================================
@@ -261,7 +298,10 @@ ID_FIELD_NAME = 'id'
 # DEST_POINTS_PATH (M x N). Cada capa se carga en su PROPIO diccionario y nunca
 # se fusionan (los ids se repiten entre capas y es legitimo). Una corrida MCP por
 # raiz y salidas NO unificadas (rutas_por_origen/).
-ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin" | "cross_layers"
+# "od_pair": UNA sola ruta desde un punto de inicio hacia un punto de destino de
+# la MISMA capa (ALL_POINTS_SHAPEFILE). Se eligen por campo y valor (ver 2d);
+# si no hay valores definidos, la Celda 4 imprime la tabla de candidatos.
+ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin" | "cross_layers" | "od_pair"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
 RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
@@ -279,6 +319,21 @@ DEST_ID_FIELD = "id"
 # destino, rutas invertidas, mismo coste acumulado); "never"; "always".
 # Solo aplica a cross_layers.
 INVERT_DIRECTION = "auto"
+
+# --- 2d. Seleccion del par origen->destino (solo modo od_pair) -------------
+# Una ruta unica entre dos puntos de la misma capa, elegidos por campo y valor.
+# El campo puede ser cualquiera de la capa (por defecto el atributo "id"; para
+# el fid del archivo usá ORIGIN_SELECT_FIELD = "fid" explicitamente). El valor
+# acepta numero o texto ("7", 7 y 7.0 son equivalentes). Si dejás los valores
+# en None, la Celda 4 imprime la tabla de candidatos (id, fid, coordenadas y
+# pixel) y detiene la ejecución: nunca elige por vos.
+# IMPORTANTE (id vs fid): el campo "id" del atributo y el "fid" del
+# GeoPackage/shapefile NO son lo mismo. El selector es estricto: si el campo no
+# existe, aborta listando los campos disponibles; jamas cae al fid por su cuenta.
+ORIGIN_SELECT_FIELD = "id"
+ORIGIN_SELECT_VALUE = None
+DEST_SELECT_FIELD = "id"
+DEST_SELECT_VALUE = None
 
 # --- 2c. Limite opcional del KDE por raiz (Celda 9, solo cross_layers) ------
 # None = un heatmap por CADA raiz; lista de ids = solo esas raices (muestra).
@@ -316,7 +371,7 @@ print("Parámetros de configuración cargados. Los resultados se guardarán en:"
 # 
 # Comprueba, en orden: CRS idénticos (ráster / puntos / máscara), solape espacial de extensiones, y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o nodata). En modo `single_origin` además valida el modo, que haya ≥ 2 puntos y que `ORIGIN_ID` exista (lista los IDs disponibles). Cualquier problema **detiene la ejecución** con un mensaje concreto; nada se calcula con datos incoherentes.
 
-# In[4]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -327,13 +382,72 @@ from pyproj import CRS  # comparación de CRS robusta entre clases fiona/rasteri
 print("\n--- VERIFICANDO LA COHERENCIA DE TODOS LOS DATOS DE ENTRADA ---")
 
 # --- Validacion del modo de analisis (S3): fallar temprano y con mensajes claros ---
-_VALID_MODES = ("all_pairs", "single_origin", "cross_layers")
+_VALID_MODES = ("all_pairs", "single_origin", "cross_layers", "od_pair")
 if ANALYSIS_MODE not in _VALID_MODES:
     raise ValueError(
         f"ANALYSIS_MODE invalido: {ANALYSIS_MODE!r}. Modos validos: {_VALID_MODES}"
     )
 if ANALYSIS_MODE == "single_origin" and ORIGIN_ID is None:
     raise ValueError("Modo single_origin requiere definir ORIGIN_ID en la Celda 3.")
+
+# --- S2/S4 (od_pair): seleccion estricta del par origen->destino ---
+# Selector por campo y valor SIN fallback silencioso a fid (L3): si el campo no
+# existe o el valor no se encuentra, aborta listando las opciones disponibles.
+# Con valores sin definir imprime la tabla de candidatos y detiene (S4).
+_IS_OD = ANALYSIS_MODE == "od_pair"
+OD_ORIGIN_ID = None
+OD_DEST_ID = None
+if _IS_OD:
+    _cands = dl.load_point_candidates(ALL_POINTS_SHAPEFILE, ID_FIELD_NAME)
+    if ORIGIN_SELECT_VALUE is None or DEST_SELECT_VALUE is None:
+        # PREVIEW: tabla de candidatos (id, fid, coordenadas y pixel).
+        with rasterio.open(COST_RASTER_PATH) as _src_prev:
+            print(
+                "\n--- PREVIEW od_pair: candidatos de "
+                f"{os.path.basename(ALL_POINTS_SHAPEFILE)} ---"
+            )
+            print(f"{'id':>10} | {'fid':>6} | {'x':>12} | {'y':>12} | pixel (row, col)")
+            for _c in _cands:
+                _rc = rasterio.transform.rowcol(
+                    _src_prev.transform, _c["coords"][0], _c["coords"][1]
+                )
+                print(
+                    f"{_c['id']:>10} | {_c['fid']:>6} | "
+                    f"{_c['coords'][0]:>12.2f} | {_c['coords'][1]:>12.2f} | {_rc}"
+                )
+        raise ValueError(
+            "Modo od_pair sin seleccion completa: define en la Celda 3 "
+            "ORIGIN_SELECT_VALUE y DEST_SELECT_VALUE (con sus campos "
+            "ORIGIN_SELECT_FIELD / DEST_SELECT_FIELD) usando la tabla de "
+            "candidatos de arriba, y vuelve a ejecutar."
+        )
+    _sel_o = dl.select_point(_cands, ORIGIN_SELECT_FIELD, ORIGIN_SELECT_VALUE)
+    _sel_d = dl.select_point(_cands, DEST_SELECT_FIELD, DEST_SELECT_VALUE)
+    OD_ORIGIN_ID = _sel_o["id"]
+    OD_DEST_ID = _sel_d["id"]
+    if OD_ORIGIN_ID == OD_DEST_ID:
+        raise ValueError(
+            f"El origen y el destino son el mismo punto "
+            f"({ORIGIN_SELECT_FIELD}={ORIGIN_SELECT_VALUE!r} -> id {OD_ORIGIN_ID}): "
+            "elegi dos puntos distintos (tabla de candidatos arriba o preview de "
+            "la Celda 4)."
+        )
+    with rasterio.open(COST_RASTER_PATH) as _src_echo:
+        _pix_o = rasterio.transform.rowcol(
+            _src_echo.transform, _sel_o["coords"][0], _sel_o["coords"][1]
+        )
+        _pix_d = rasterio.transform.rowcol(
+            _src_echo.transform, _sel_d["coords"][0], _sel_d["coords"][1]
+        )
+    print("--- od_pair: seleccion resuelta ---")
+    print(
+        f"  ORIGEN: campo {ORIGIN_SELECT_FIELD}={ORIGIN_SELECT_VALUE!r} -> "
+        f"id {OD_ORIGIN_ID} (fid {_sel_o['fid']}) | coords {_sel_o['coords']} | pixel {_pix_o}"
+    )
+    print(
+        f"  DESTINO: campo {DEST_SELECT_FIELD}={DEST_SELECT_VALUE!r} -> "
+        f"id {OD_DEST_ID} (fid {_sel_d['fid']}) | coords {_sel_d['coords']} | pixel {_pix_d}"
+    )
 
 # --- S3: politica de inversion de direccion (solo tiene efecto en cross_layers) ---
 if INVERT_DIRECTION not in planner.INVERT_POLICIES:
@@ -633,7 +747,7 @@ except Exception as e:
 # 
 # Mapa del ráster de coste en escala **lineal y logarítmica** con los puntos superpuestos, guardado como `visualizacion_diagnostica.png`. Usalo para verificar la configuración antes de lanzar el análisis; en modo `single_origin` el origen aparece resaltado con una estrella.
 
-# In[5]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -801,7 +915,7 @@ except Exception as e:
 # - **Fase 2**: reconstrucción Numba de cada ruta y escritura de `red_completa_unificada.gpkg` (más la capa `destinos_inalcanzables` si los hay).
 # - Imprime `MODO:` con las rutas esperadas y compara al final esperadas vs reales (diferencia = destinos con coste infinito). Si un worker falla, la ejecución **se detiene** antes de escribir el GPKG.
 
-# In[6]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -826,6 +940,7 @@ pipeline_ok = False  # True solo si las 5 fases terminan; controla la limpieza e
 # S1: capas separadas en el modo nuevo. En cross_layers los ids se repiten entre
 # capas (el sitio 1 y la fuente 1 son puntos distintos) y NUNCA se fusionan.
 _IS_CROSS = ANALYSIS_MODE == "cross_layers"
+_IS_OD = ANALYSIS_MODE == "od_pair"
 origin_points, dest_points = {}, {}
 plan = None
 inverted = False
@@ -909,6 +1024,19 @@ try:
             f"{len(dest_points)} destinos = {n_expected} pares | "
             f"invertido: {inverted} | raices MCP: {len(plan['roots'])}"
         )
+    elif ANALYSIS_MODE == "od_pair":
+        # Una sola ruta: la raiz MCP es el origen elegido y el unico target es
+        # el destino elegido. Sin dedup did > origin_id: el par pedido tal cual
+        # (incluye origin_id > dest_id). El task unico se agrega en la cadena
+        # de tasks de abajo.
+        plan = planner.build_pair_plan(
+            "od_pair", all_points, origin_id=OD_ORIGIN_ID, dest_id=OD_DEST_ID
+        )
+        n_expected = plan["n_expected"]
+        dest_pixels_all = {
+            pid: proc.world_to_pixel(transform, coords[0], coords[1])
+            for pid, coords in all_points.items()
+        }
     else:
         dest_pixels_all = {
             pid: proc.world_to_pixel(transform, coords[0], coords[1])
@@ -923,6 +1051,7 @@ try:
     _fp_data = {
         "mode": ANALYSIS_MODE,
         "origin": ORIGIN_ID,
+        "od": [OD_ORIGIN_ID, OD_DEST_ID] if _IS_OD else None,
         "invert": INVERT_DIRECTION,
         "points": sorted(
             (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
@@ -994,6 +1123,12 @@ try:
             if not dest_pixels:
                 continue
             tasks_p1.append((root_id, root_pixel, dest_pixels, shared_data, PHASE1_DIR))
+    elif ANALYSIS_MODE == "od_pair":
+        # Un solo task de Fase 1: raiz = origen elegido, unico target = destino
+        # elegido (sin dedup did > origin_id; el par pedido tal cual).
+        origin_pixel = dest_pixels_all[OD_ORIGIN_ID]
+        dest_pixels = {OD_DEST_ID: dest_pixels_all[OD_DEST_ID]}
+        tasks_p1.append((OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
     elif ANALYSIS_MODE == "single_origin":
         # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
         # puntos; sin filtro did > origin_id (los ids menores tambien corresponden)
@@ -1035,7 +1170,9 @@ try:
             )
         n_jobs_p1 = min(n_jobs_p1, _pedido)
         print(f"  MAX_WORKERS_PHASE1 aplicado: {n_jobs_p1} workers")
-    if ANALYSIS_MODE == "single_origin":
+    if ANALYSIS_MODE == "od_pair":
+        modo_desc = f"od_pair (origen {OD_ORIGIN_ID} -> destino {OD_DEST_ID})"
+    elif ANALYSIS_MODE == "single_origin":
         modo_desc = f"single_origin (origen {ORIGIN_ID})"
     elif _IS_CROSS:
         modo_desc = (
@@ -1392,7 +1529,7 @@ finally:
 # 
 # Carga la red desde memoria (o el GeoPackage), armoniza CRS con el ráster, recorta la ventana con margen y dibuja rutas + nodos sobre el coste en escala logarítmica. Guarda `red_de_rutas_final.png`.
 
-# In[7]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -1644,7 +1781,7 @@ except Exception as e:
 # 
 # Coloca un punto cada `SPACING_M` metros (25 m por defecto) sobre cada ruta por interpolación vectorizada sobre la longitud acumulada. Guarda `puntos_rutas_<espaciado>m.gpkg` con la columna `route_idx` para trazabilidad. Es la entrada de la Celda 9.
 
-# In[8]:
+# In[ ]:
 
 
 # ==============================================================================
@@ -1906,7 +2043,7 @@ else:
 # 
 # Estimación de densidad sobre los puntos densificados: grilla con margen = bandwidth, binning numpy, kernel QGIS (`HEATMAP_KERNEL`, quartic por defecto) y convolución FFT con recorte "same". La lógica vive en `_compute_heatmap` (con tests de regresión: pico, georreferenciación y masa). Salidas: GeoTIFF + PNG. Parámetros: `HEATMAP_RES_M`, `HEATMAP_BANDWIDTH_M`, `HEATMAP_KERNEL`.
 
-# In[9]:
+# In[ ]:
 
 
 # ==============================================================================
