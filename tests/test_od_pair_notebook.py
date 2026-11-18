@@ -253,3 +253,67 @@ def test_e2e_od_pair_origin_equals_dest_rejected(tmp_path):
     _out, err = nh.run_code(srcs[:4], timeout=300)
     assert err is not None
     assert "mismo punto" in err
+
+
+def test_e2e_od_pair_unreachable_destination_reported_not_silent(tmp_path):
+    # R3-5: destino al otro lado de una barrera de nodata = inalcanzable.
+    # La corrida no escribe rutas: la capa rutas_unificadas queda vacia o sin
+    # crear, el par aparece en destinos_inalcanzables con coste infinito y el
+    # aviso se imprime (n_expected=1, escritas=0) en vez de perderse callado.
+    raster = tmp_path / "cost_barrier.tif"
+    nh.write_barrier_raster(str(raster), barrier_col=50)
+    points = tmp_path / "points_barrier.shp"
+    schema = {"geometry": "Point", "properties": {"id": "int", "nombre": "str"}}
+    with fiona.open(
+        points, "w", driver="ESRI Shapefile", schema=schema, crs="EPSG:32719"
+    ) as dst:
+        dst.write(
+            {
+                "geometry": mapping(Point(10.5, 89.5)),
+                "properties": {"id": 1, "nombre": "oeste"},
+            }
+        )
+        dst.write(
+            {
+                "geometry": mapping(Point(60.5, 40.5)),
+                "properties": {"id": 3, "nombre": "este"},
+            }
+        )
+    repl = {
+        "OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')": (
+            f"OUTPUT_DIR = os.path.join({str(tmp_path)!r}, 'od_unreachable')"
+        ),
+        "COST_RASTER_PATH = os.path.join(DATA_DIR, 'cost.tif')": (
+            f"COST_RASTER_PATH = {str(raster)!r}"
+        ),
+        "ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'points.shp')": (
+            f"ALL_POINTS_SHAPEFILE = {str(points)!r}"
+        ),
+        'ANALYSIS_MODE = "all_pairs"': 'ANALYSIS_MODE = "od_pair"',
+        "MASK_SHAPEFILE_PATH = os.path.join(DATA_DIR, 'area-mask.shp')": (
+            "MASK_SHAPEFILE_PATH = None"
+        ),
+        "MAX_WORKERS_PHASE1 = None": "MAX_WORKERS_PHASE1 = 1",
+        'ORIGIN_SELECT_FIELD = "id"': 'ORIGIN_SELECT_FIELD = "nombre"',
+        'ORIGIN_SELECT_VALUE = None': 'ORIGIN_SELECT_VALUE = "oeste"',
+        'DEST_SELECT_FIELD = "id"': 'DEST_SELECT_FIELD = "nombre"',
+        'DEST_SELECT_VALUE = None': 'DEST_SELECT_VALUE = "este"',
+    }
+    srcs = nh.load_code_sources()
+    srcs[2] = nh.patch_cell3(srcs[2], repl)
+    _out, err = nh.run_code([*srcs[:4], srcs[5]], timeout=600)
+    assert err is None, err
+    gpkg = tmp_path / "od_unreachable" / "red_completa_unificada.gpkg"
+    assert gpkg.exists()
+    layers = set(fiona.listlayers(str(gpkg)))
+    if "rutas_unificadas" in layers:
+        gdf = gpd.read_file(gpkg, layer="rutas_unificadas")
+        assert len(gdf) == 0
+    unreachable = gpd.read_file(gpkg, layer="destinos_inalcanzables")
+    assert len(unreachable) == 1
+    row = unreachable.iloc[0]
+    assert int(row["origin_id"]) == 1
+    assert int(row["dest_id"]) == 3
+    assert not np.isfinite(row["cost_total"])
+    # El aviso de coste infinito se imprime: nada se pierde en silencio.
+    assert "infinito" in _out
