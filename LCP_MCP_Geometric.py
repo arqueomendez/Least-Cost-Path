@@ -301,8 +301,18 @@ ID_FIELD_NAME = 'id'
 # "od_pair": UNA sola ruta desde un punto de inicio hacia un punto de destino de
 # la MISMA capa (ALL_POINTS_SHAPEFILE). Se eligen por campo y valor (ver 2d);
 # si no hay valores definidos, la Celda 4 imprime la tabla de candidatos.
+# --- 2e. Kernel de calculo (opcional) ---
+# "mcp_geometric" (default): Dijkstra exacto de skimage (comportamiento
+#    historico, todos los modos). Una corrida por raiz sirve a todos los
+#    destinos.
+# "corridor_astar": A* jerarquico dirigido al objetivo (Fase 1 en baja
+#    resolucion -> corredor -> Fase 2 en alta resolucion). SOLO para el
+#    modo "od_pair" (una ruta 1->1 en rasters grandes). Modelo de coste:
+#    media de costes de celda * distancia (difiere del modelo geometrico
+#    de skimage; las rutas pueden diferir levemente).
 ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin" | "cross_layers" | "od_pair"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
+KERNEL = "mcp_geometric"   # "mcp_geometric" (default, todos los modos) | "corridor_astar" (solo od_pair)
 RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
                                 # workers de Fase 1 si topa con ArrayMemoryError en rams compartidas
@@ -389,6 +399,9 @@ if ANALYSIS_MODE not in _VALID_MODES:
     )
 if ANALYSIS_MODE == "single_origin" and ORIGIN_ID is None:
     raise ValueError("Modo single_origin requiere definir ORIGIN_ID en la Celda 3.")
+
+# --- Seleccion de kernel de calculo (S-kernel): fallar temprano ---
+planner.check_kernel(ANALYSIS_MODE, KERNEL)
 
 # --- S2/S4 (od_pair): seleccion estricta del par origen->destino ---
 # Selector por campo y valor SIN fallback silencioso a fid (L3): si el campo no
@@ -992,12 +1005,63 @@ try:
 
     print(f"  Forma raster: {raster_shape}, dtype: {raster_dtype}")
 
-    print("[Paso 2/5] Escribiendo raster en memmap compartido...")
-    mm = np.memmap(memmap_path, dtype=raster_dtype, mode="w+", shape=raster_shape)
-    mm[:] = final_cost_raster[:]
-    mm.flush()
-    del mm, final_cost_raster
-    print(f"  Memmap escrito en: {memmap_path}")
+    # --- Kernel de calculo (opcion del usuario, KERNEL en Celda 3) ---
+    # "mcp_geometric" (default): pipeline MCP de siempre, intacto.
+    # "corridor_astar" (solo od_pair): A* jerarquico dirigido 1->1; calcula la
+    # ruta aqui mismo (una sola busqueda) y escribe el registro en el MISMO
+    # GPKG/flujo de salidas; Fase 1 y Fase 2 de MCP se omiten (sin memmap).
+    _KERNEL_CORRIDOR = _IS_OD and KERNEL == "corridor_astar"
+    if _KERNEL_CORRIDOR:
+        t0_kernel = time.time()
+        print("\n[Kernel] corridor_astar: Fase 1 (baja resolucion) -> corredor -> Fase 2 (alta resolucion)")
+        _nodata_k = src.nodata if src.nodata is not None else float("inf")
+        _origin_pixel = proc.world_to_pixel(
+            transform, all_points[OD_ORIGIN_ID][0], all_points[OD_ORIGIN_ID][1]
+        )
+        _dest_pixel = proc.world_to_pixel(
+            transform, all_points[OD_DEST_ID][0], all_points[OD_DEST_ID][1]
+        )
+        path_px, cost_k = pf.corridor_astar_route(
+            final_cost_raster,
+            _nodata_k,
+            src.res[0],
+            abs(src.res[1]),
+            _origin_pixel,
+            _dest_pixel,
+            main_search_mask,
+        )
+        if path_px is None:
+            print(
+                f"  Sin ruta alcanzable entre {OD_ORIGIN_ID} y {OD_DEST_ID} "
+                "con corridor_astar: no se escribe ruta."
+            )
+        else:
+            _record = utils.build_route_record(
+                path_px, transform, OD_ORIGIN_ID, OD_DEST_ID, float(cost_k)
+            )
+            if _record is not None:
+                if os.path.exists(gpkg_tmp_path):
+                    os.remove(gpkg_tmp_path)
+                gpd.GeoDataFrame([_record], crs=raster_crs).to_file(
+                    gpkg_tmp_path, layer="rutas_unificadas", driver="GPKG", mode="w"
+                )
+                n_rutas_escritas = 1
+                print(
+                    f"  Ruta corridor_astar: {len(path_px)} pixeles, "
+                    f"coste acumulado {float(cost_k):.2f}"
+                )
+        dur_p1 = time.time() - t0_kernel
+        dur_p2 = 0.0
+
+    if _KERNEL_CORRIDOR:
+        print("[Paso 2/5] Omitido: corridor_astar trabaja sobre el raster en memoria.")
+    else:
+        print("[Paso 2/5] Escribiendo raster en memmap compartido...")
+        mm = np.memmap(memmap_path, dtype=raster_dtype, mode="w+", shape=raster_shape)
+        mm[:] = final_cost_raster[:]
+        mm.flush()
+        del mm, final_cost_raster
+        print(f"  Memmap escrito en: {memmap_path}")
 
     shared_data = {
         "memmap_path":  memmap_path,
@@ -1127,7 +1191,10 @@ try:
         # elegido (sin dedup did > origin_id; el par pedido tal cual).
         origin_pixel = dest_pixels_all[OD_ORIGIN_ID]
         dest_pixels = {OD_DEST_ID: dest_pixels_all[OD_DEST_ID]}
-        tasks_p1.append((OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+        if not _KERNEL_CORRIDOR:
+            tasks_p1.append(
+                (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR)
+            )
     elif ANALYSIS_MODE == "single_origin":
         # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
         # puntos; sin filtro did > origin_id (los ids menores tambien corresponden)
@@ -1285,7 +1352,8 @@ try:
             n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
         )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
 
-        if os.path.exists(gpkg_tmp_path):
+        # corridor_astar ya escribio el temporal con su ruta; no se borra.
+        if not _KERNEL_CORRIDOR and os.path.exists(gpkg_tmp_path):
             os.remove(gpkg_tmp_path)
         with tqdm(
             total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None

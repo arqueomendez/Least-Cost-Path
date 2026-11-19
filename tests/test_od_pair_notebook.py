@@ -99,8 +99,10 @@ def test_cell6_fingerprint_includes_od_ids():
 
 def test_cell6_phase1_single_task_for_od_pair():
     src = _source(CELL_EXEC)
-    # Un solo task de Fase 1 con la raiz = origen elegido.
-    assert "tasks_p1.append((OD_ORIGIN_ID" in src
+    # Un solo task de Fase 1 con la raiz = origen elegido; con el kernel
+    # corridor_astar (KERNEL opcional) el task MCP se omite para od_pair.
+    assert "if not _KERNEL_CORRIDOR:" in src
+    assert "tasks_p1.append(" in src
 
 
 def test_cell6_mode_description_mentions_od_pair():
