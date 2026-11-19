@@ -148,6 +148,20 @@ class TestCorridorAstarRoute:
         for r, c in path:
             assert mask[r, c]
 
+    def test_origin_near_bottom_edge_does_not_read_out_of_bounds(self):
+        # R2/R3 (revision nativa): origen/destino dentro de las ultimas
+        # factor-1 filas del raster quedaban fuera del grid LR recortado
+        # (floor(dim/factor)) y, con numba sin bounds checking, escribian
+        # fuera de rango. El clamp debe mantener la ruta valida.
+        surface = _surface_with_barrier(height=600, width=600)
+        start, end = (595, 30), (5, 570)  # fila 595: dentro del borde de 32
+        path, cost_total = pf.corridor_astar_route(
+            surface, -9999.0, 1.0, 1.0, start, end, _empty_mask(surface.shape)
+        )
+        assert path is not None and np.isfinite(cost_total)
+        assert path[0].tolist() == [595, 30]
+        assert path[-1].tolist() == [5, 570]
+
 
 class TestKernelSelection:
     def test_default_kernel_valid_in_every_mode(self):

@@ -371,8 +371,19 @@ def corridor_astar_route(
     for factor in downsampling_factors:
         cost_lr, dx_lr, dy_lr = proc.create_low_res_data(cost_data, res_x, res_y, factor)
         mask_lr = search_mask[::factor, ::factor]
-        start_lr = (start_pixel[0] // factor, start_pixel[1] // factor)
-        end_lr = (end_pixel[0] // factor, end_pixel[1] // factor)
+        # Clamp al grid LR recortado (floor(dim/factor)): un pixel dentro de
+        # las ultimas factor-1 filas/columnas del raster caeria fuera del grid
+        # y, con bounds checking deshabilitado en numba, g_cost[start_lr] = 0.0
+        # seria una escritura fuera de rango antes del PLAN B (hallazgos R2/R3
+        # de la revision nativa).
+        start_lr = (
+            min(start_pixel[0] // factor, cost_lr.shape[0] - 1),
+            min(start_pixel[1] // factor, cost_lr.shape[1] - 1),
+        )
+        end_lr = (
+            min(end_pixel[0] // factor, cost_lr.shape[0] - 1),
+            min(end_pixel[1] // factor, cost_lr.shape[1] - 1),
+        )
         found_lr, came_from_lr = a_star_search(
             cost_lr, nodata_value, start_lr, end_lr, dx_lr, abs(dy_lr), heuristic_weight, mask_lr
         )
