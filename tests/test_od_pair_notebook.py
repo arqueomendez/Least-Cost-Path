@@ -101,8 +101,10 @@ def test_cell6_phase1_single_task_for_od_pair():
     src = _source(CELL_EXEC)
     # Un solo task de Fase 1 con la raiz = origen elegido; con el kernel
     # corridor_astar (KERNEL opcional) el task MCP se omite para od_pair.
+    # R2-003/R3-odpair-task-assert (revision): el pin debe exigir el root
+    # exacto OD_ORIGIN_ID, no cualquier append de la celda.
     assert "if not _KERNEL_CORRIDOR:" in src
-    assert "tasks_p1.append(" in src
+    assert "tasks_p1.append(\n                (OD_ORIGIN_ID," in src
 
 
 def test_cell6_mode_description_mentions_od_pair():
@@ -206,6 +208,36 @@ def test_e2e_od_pair_writes_single_route_no_dedup(tmp_path):
     assert np.isfinite(row["cost_total"])
     assert np.isfinite(row["length_m"])
     assert row.geometry.geom_type == "LineString"
+
+
+def test_e2e_corridor_astar_writes_single_route_and_skips_mcp(tmp_path):
+    # R3-corridor-notebook-branch-uncovered (revision): cobertura e2e del
+    # branch de Celda 6 con KERNEL="corridor_astar": la ruta se escribe en
+    # el mismo GPKG unificado y el resumen reporta el kernel, no MCP.
+    srcs = _od_sources(
+        tmp_path,
+        "corridor_e2e",
+        **{
+            'KERNEL = "mcp_geometric"': 'KERNEL = "corridor_astar"',
+            "ORIGIN_SELECT_VALUE = None": 'ORIGIN_SELECT_VALUE = "3"',
+            "DEST_SELECT_VALUE = None": 'DEST_SELECT_VALUE = "1"',
+        },
+    )
+    _out, err = nh.run_code([*srcs[:4], srcs[5]], timeout=600)
+    assert err is None, err
+    session = tmp_path / "corridor_e2e"
+    gpkg = session / "red_completa_unificada.gpkg"
+    assert gpkg.exists()
+    gdf = gpd.read_file(gpkg, layer="rutas_unificadas")
+    assert len(gdf) == 1
+    row = gdf.iloc[0]
+    assert int(row["origin_id"]) == 3
+    assert int(row["dest_id"]) == 1
+    assert np.isfinite(row["cost_total"])
+    assert row.geometry.geom_type == "LineString"
+    # El branch corridor no debe ejecutar Fase 1 MCP ni reportar tracebacks.
+    assert "Tracebacks guardados" not in (_out or "")
+    assert "corridor_astar" in (_out or "")
 
 
 def test_e2e_od_pair_missing_selection_shows_preview_and_stops(tmp_path):

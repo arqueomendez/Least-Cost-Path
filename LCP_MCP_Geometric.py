@@ -995,6 +995,10 @@ try:
     with dl.load_raster(COST_RASTER_PATH) as src:
         transform = src.transform
         raster_crs = src.crs
+        # R2-002/R3 (revision): capturar nodata/res DENTRO del with; leerlos
+        # despues de cerrar el dataset depende del caching de rasterio.
+        src_nodata = src.nodata
+        src_res = src.res
         original_cost_data = src.read(1)
         final_cost_raster = np.where(
             main_search_mask, original_cost_data, np.inf
@@ -1009,12 +1013,14 @@ try:
     # "mcp_geometric" (default): pipeline MCP de siempre, intacto.
     # "corridor_astar" (solo od_pair): A* jerarquico dirigido 1->1; calcula la
     # ruta aqui mismo (una sola busqueda) y escribe el registro en el MISMO
-    # GPKG/flujo de salidas; Fase 1 y Fase 2 de MCP se omiten (sin memmap).
+    # GPKG/flujo de salidas. Las secciones propias del pipeline MCP (memmap,
+    # huella de reanudacion, warm-up, Fases 1 y 2) quedan acotadas con
+    # _KERNEL_CORRIDOR: en modo corridor no se ejecutan.
     _KERNEL_CORRIDOR = _IS_OD and KERNEL == "corridor_astar"
     if _KERNEL_CORRIDOR:
         t0_kernel = time.time()
         print("\n[Kernel] corridor_astar: Fase 1 (baja resolucion) -> corredor -> Fase 2 (alta resolucion)")
-        _nodata_k = src.nodata if src.nodata is not None else float("inf")
+        _nodata_k = src_nodata if src_nodata is not None else float("inf")
         _origin_pixel = proc.world_to_pixel(
             transform, all_points[OD_ORIGIN_ID][0], all_points[OD_ORIGIN_ID][1]
         )
@@ -1024,8 +1030,8 @@ try:
         path_px, cost_k = pf.corridor_astar_route(
             final_cost_raster,
             _nodata_k,
-            src.res[0],
-            abs(src.res[1]),
+            src_res[0],
+            abs(src_res[1]),
             _origin_pixel,
             _dest_pixel,
             main_search_mask,
@@ -1074,7 +1080,8 @@ try:
         # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
     }
 
-    warm_up_numba()
+    if not _KERNEL_CORRIDOR:
+        warm_up_numba()
 
     # --- S2/S1: plan de pares por modo (una raiz MCP por entrada de plan["roots"]) ---
     if _IS_CROSS:
@@ -1106,68 +1113,70 @@ try:
             for pid, coords in all_points.items()
         }
 
-    # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
-    import hashlib
-    import json as _json
+    # Corridor astar no usa tracebacks ni reanudacion: sin huella (R2-001).
+    if not _KERNEL_CORRIDOR:
+        # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
+        import hashlib
+        import json as _json
 
-    _fp_points = origin_points if _IS_CROSS else all_points
-    _fp_data = {
-        "mode": ANALYSIS_MODE,
-        "origin": ORIGIN_ID,
-        "od": [OD_ORIGIN_ID, OD_DEST_ID] if _IS_OD else None,
-        "invert": INVERT_DIRECTION,
-        "points": sorted(
-            (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
-            for k, v in _fp_points.items()
-        ),
-        "raster_size": os.path.getsize(COST_RASTER_PATH),
-        "raster_mtime": int(os.path.getmtime(COST_RASTER_PATH)),
-    }
-    if _IS_CROSS:
-        # S9: la segunda capa y la direccion resuelta son parte de la identidad de
-        # Fase 1; sin ellas se reutilizarian tracebacks de otra corrida (F4).
-        _fp_data["origin_layer"] = {
-            "path": os.path.abspath(ORIGIN_POINTS_PATH),
-            "field": ORIGIN_ID_FIELD,
-        }
-        _fp_data["dest_layer"] = {
-            "path": os.path.abspath(DEST_POINTS_PATH),
-            "field": DEST_ID_FIELD,
+        _fp_points = origin_points if _IS_CROSS else all_points
+        _fp_data = {
+            "mode": ANALYSIS_MODE,
+            "origin": ORIGIN_ID,
+            "od": [OD_ORIGIN_ID, OD_DEST_ID] if _IS_OD else None,
+            "invert": INVERT_DIRECTION,
             "points": sorted(
                 (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
-                for k, v in dest_points.items()
+                for k, v in _fp_points.items()
             ),
+            "raster_size": os.path.getsize(COST_RASTER_PATH),
+            "raster_mtime": int(os.path.getmtime(COST_RASTER_PATH)),
         }
-        _fp_data["inverted"] = inverted
-    # S9: la mascara define el area navegable; cambiar el poligono invalida los
-    # tracebacks aunque el raster y los puntos no cambien.
-    _fp_data["mask"] = None
-    if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
-        _fp_data["mask"] = {
-            "path": os.path.abspath(MASK_SHAPEFILE_PATH),
-            "size": os.path.getsize(MASK_SHAPEFILE_PATH),
-            "mtime": int(os.path.getmtime(MASK_SHAPEFILE_PATH)),
-        }
-    # S9/M3: EDGE_BUFFER_PX recorta el marco exterior del area navegable, asi que
-    # cambiarlo invalida los tracebacks aunque el raster y los puntos no cambien.
-    _fp_data["edge_buffer_px"] = int(EDGE_BUFFER_PX)
-    fingerprint = hashlib.sha256(
-        _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    meta_path = os.path.join(PHASE1_DIR, "phase1_meta.json")
-    _meta_ok = False
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as _fh:
-                _meta_ok = _json.load(_fh).get("fingerprint") == fingerprint
-        except (OSError, ValueError):
-            _meta_ok = False
-    if not _meta_ok:
-        # huella distinta o meta ilegible: los npz previos no sirven
-        shutil.rmtree(PHASE1_DIR, ignore_errors=True)
-        os.makedirs(PHASE1_DIR, exist_ok=True)
-    with open(meta_path, "w", encoding="utf-8") as _fh:
-        _json.dump({"fingerprint": fingerprint}, _fh)
+        if _IS_CROSS:
+            # S9: la segunda capa y la direccion resuelta son parte de la identidad de
+            # Fase 1; sin ellas se reutilizarian tracebacks de otra corrida (F4).
+            _fp_data["origin_layer"] = {
+                "path": os.path.abspath(ORIGIN_POINTS_PATH),
+                "field": ORIGIN_ID_FIELD,
+            }
+            _fp_data["dest_layer"] = {
+                "path": os.path.abspath(DEST_POINTS_PATH),
+                "field": DEST_ID_FIELD,
+                "points": sorted(
+                    (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
+                    for k, v in dest_points.items()
+                ),
+            }
+            _fp_data["inverted"] = inverted
+        # S9: la mascara define el area navegable; cambiar el poligono invalida los
+        # tracebacks aunque el raster y los puntos no cambien.
+        _fp_data["mask"] = None
+        if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
+            _fp_data["mask"] = {
+                "path": os.path.abspath(MASK_SHAPEFILE_PATH),
+                "size": os.path.getsize(MASK_SHAPEFILE_PATH),
+                "mtime": int(os.path.getmtime(MASK_SHAPEFILE_PATH)),
+            }
+        # S9/M3: EDGE_BUFFER_PX recorta el marco exterior del area navegable, asi que
+        # cambiarlo invalida los tracebacks aunque el raster y los puntos no cambien.
+        _fp_data["edge_buffer_px"] = int(EDGE_BUFFER_PX)
+        fingerprint = hashlib.sha256(
+            _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        meta_path = os.path.join(PHASE1_DIR, "phase1_meta.json")
+        _meta_ok = False
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as _fh:
+                    _meta_ok = _json.load(_fh).get("fingerprint") == fingerprint
+            except (OSError, ValueError):
+                _meta_ok = False
+        if not _meta_ok:
+            # huella distinta o meta ilegible: los npz previos no sirven
+            shutil.rmtree(PHASE1_DIR, ignore_errors=True)
+            os.makedirs(PHASE1_DIR, exist_ok=True)
+        with open(meta_path, "w", encoding="utf-8") as _fh:
+            _json.dump({"fingerprint": fingerprint}, _fh)
 
     # --- PASO 3: FASE 1 (segun modo de analisis) ---
     if _IS_CROSS:
@@ -1248,7 +1257,8 @@ try:
     else:
         modo_desc = "all_pairs (N x N)"
     print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
-    print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
+    if not _KERNEL_CORRIDOR:
+        print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
     # --- S9: reutilizar tracebacks con huella coincidente (RESUME) ---
     reusable = {}
@@ -1293,13 +1303,17 @@ try:
             cost_scalars_index[oid] = cdict
             pbar1.update(1)
 
-    dur_p1 = time.time() - t0_p1
-    print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
+    # R2-001/R3-corridor-summary: en corridor, dur_p1 conserva el tiempo del
+    # kernel y no se sobrescribe con el timing de una Fase 1 vacia.
+    if not _KERNEL_CORRIDOR:
+        dur_p1 = time.time() - t0_p1
+        print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
     cost_scalars_index.update(reusable)
     failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
     n_computed = len(cost_scalars_index) - len(failed_origins)
-    print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
+    if not _KERNEL_CORRIDOR:
+        print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
 
     # Fallo duro: si algun worker fallo, la red resultante quedaria incompleta
     # y escribir un GPKG parcial seria enganoso. Detenemos antes de la Fase 2.
@@ -1332,7 +1346,8 @@ try:
         n_jobs_p2 = _calculate_n_jobs_for_phase(
             raster_shape, raster_dtype, phase=2, n_tasks=len(tasks_p2)
         )
-        print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
+        if not _KERNEL_CORRIDOR:
+            print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
         for origin_id, origin_coords in all_points.items():
             cost_scalars = cost_scalars_index.get(origin_id, {})
@@ -1371,7 +1386,8 @@ try:
                 )
                 n_rutas_escritas += len(records)
 
-        dur_p2 = time.time() - t0_p2
+        if not _KERNEL_CORRIDOR:
+            dur_p2 = time.time() - t0_p2
         print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
         print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
@@ -1516,7 +1532,8 @@ try:
                 # un estado parcial legible.
                 outputs.write_manifest(paths_out, manifest_rows)
 
-        dur_p2 = time.time() - t0_p2
+        if not _KERNEL_CORRIDOR:
+            dur_p2 = time.time() - t0_p2
         print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
         print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
