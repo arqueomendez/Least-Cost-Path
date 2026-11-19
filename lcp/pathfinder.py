@@ -2,6 +2,7 @@
 
 import math
 import os
+from itertools import pairwise
 
 import numpy as np
 from numba import njit
@@ -235,7 +236,7 @@ def a_star_search(cost_array, nodata_value, start_pixel, end_pixel, dx, dy, weig
 
     while open_set.shape[0] > 0:
         min_idx = np.argmin(open_set[:, 0])
-        f, g, r, c = open_set[min_idx]
+        _f, g, r, c = open_set[min_idx]
         current_pos = (int(r), int(c))
 
         if open_set.shape[0] == 1:
@@ -324,7 +325,7 @@ def accumulate_cost(cost_array, nodata_value, res_x, res_y, pixel_path):
     final, de modo que `cost_total` es comparable entre fases.
     """
     total = 0.0
-    for (r0, c0), (r1, c1) in zip(pixel_path[:-1], pixel_path[1:]):
+    for (r0, c0), (r1, c1) in pairwise(pixel_path):
         cost_0 = float(cost_array[r0, c0])
         cost_1 = float(cost_array[r1, c1])
         if cost_1 == nodata_value or not np.isfinite(cost_1) or not np.isfinite(cost_0):

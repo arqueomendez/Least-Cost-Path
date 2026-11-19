@@ -88,7 +88,7 @@ class TestAStarSearch:
         mask = _empty_mask(surface.shape)
         # Se cierra el paso barato: la ruta debe evitar TODAS las celdas
         # excluidas (la barrera de coste 1000 sigue siendo transitable).
-        closed = mask[300:302, 296:305].copy()
+        _closed = mask[300:302, 296:305].copy()
         mask[300:302, 296:305] = False
         found, came_from2 = pf.a_star_search(
             surface, -9999.0, (100, 100), (500, 500), 1.0, 1.0, 1.0, mask
