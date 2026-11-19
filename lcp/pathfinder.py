@@ -360,6 +360,19 @@ def corridor_astar_route(
     inf cuando no hay ruta alcanzable. `cost_data` debe ser un array
     float con np.inf (o nodata_value) en las celdas prohibidas; el
     caller aplica la mascara de estudio igual que en el pipeline MCP.
+
+    Defaults heredados de main y su rol: `downsampling_factors` es la
+    escalera de granularidad (32 = exploracion mas gruesa; 20 y 10
+    refinan si la anterior no encuentra ruta); `corridor_buffer_pixels`
+    es el ancho del corredor de Fase 2 alrededor de la ruta LR, y es el
+    parametro que mas afecta si el corredor contiene la ruta optima.
+    Cambiarlos cambia la calidad de la ruta silenciosamente.
+
+    R3-astar-heuristic-admissibility (revision): con `heuristic_weight=1.0`
+    la heuristica euclidiana es admisible SOLO si todo coste de celda es
+    >= 1.0; en superficies con costes < 1.0 puede sobreestimar y la ruta
+    puede ser suboptima bajo el propio modelo del kernel. `heuristic_weight=0`
+    convierte la busqueda en Dijkstra exacto (mas lento, sin direccion).
     """
     import lcp.processing as proc
 

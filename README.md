@@ -472,6 +472,8 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p O
 
 **Limitaciones de `corridor_astar`**: el modelo de coste difiere del geométrico de skimage, por lo que la ruta y el `cost_total` pueden diferir levemente de los del kernel default para el mismo par; en rásters pequeños la ventaja es nula o inversa (dos fases de overhead); solo está disponible para un par a la vez. Los resultados comparados entre kernels son válidos como **costes independientes por modelo**, no como el mismo modelo con distinto orden de exploración.
 
+**Admisibilidad de la heurística (solo `corridor_astar`)**: el kernel usa una heurística euclidiana con `heuristic_weight = 1.0`, que es admisible (garantiza la ruta óptima bajo su propio modelo de coste) solo si **todo coste de celda de la superficie es ≥ 1.0**. En superficies con costes por debajo de 1 (p. ej. velocidades de marcha normalizadas) la heurística sobreestima el coste restante y la ruta puede ser subóptima *dentro del propio kernel*. Si la optimalidad importa sobre esa clase de superficies, definiendo `HEURISTIC_WEIGHT = 0` en la firma de `corridor_astar_route` la búsqueda se vuelve Dijkstra exacto (más lento, sin dirección al objetivo).
+
 **Nota sobre paralelización por tiles**: la experimentación con divisiones del ráster en tiles (`LCP-parallel-tile`) queda como **feature futuro**: la implementación resultó compleja y con artefactos en los bordes de tile, y no forma parte de esta versión.
 
 ### Modo od_pair
