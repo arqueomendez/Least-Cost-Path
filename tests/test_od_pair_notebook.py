@@ -103,8 +103,12 @@ def test_cell6_phase1_single_task_for_od_pair():
     # corridor_astar (KERNEL opcional) el task MCP se omite para od_pair.
     # R2-003/R3-odpair-task-assert (revision): el pin debe exigir el root
     # exacto OD_ORIGIN_ID, no cualquier append de la celda.
+    # R2-brittle-test-pin/R3-002 (revision): el match se hace sobre el source
+    # NORMALIZADO (whitespace colapsado) para no romper con un re-indentado
+    # inocente del notebook, sin dejar de exigir el root exacto.
     assert "if not _KERNEL_CORRIDOR:" in src
-    assert "tasks_p1.append(\n                (OD_ORIGIN_ID," in src
+    normalized = " ".join(src.split())
+    assert "tasks_p1.append( (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR) )" in normalized
 
 
 def test_cell6_mode_description_mentions_od_pair():
@@ -214,6 +218,10 @@ def test_e2e_corridor_astar_writes_single_route_and_skips_mcp(tmp_path):
     # R3-corridor-notebook-branch-uncovered (revision): cobertura e2e del
     # branch de Celda 6 con KERNEL="corridor_astar": la ruta se escribe en
     # el mismo GPKG unificado y el resumen reporta el kernel, no MCP.
+    # Composicion ejecutada (R3-003, revision): celdas 1-4 de srcs (imports,
+    # funciones, parametros, verificacion) + srcs[5] = Celda 6 (ejecucion).
+    # srcs[4] es la Celda 5 de visualizacion diagnostica y no afecta la
+    # salida; se omite a proposito, igual que en test_e2e_od_pair_*.
     srcs = _od_sources(
         tmp_path,
         "corridor_e2e",

@@ -1013,9 +1013,10 @@ try:
     # "mcp_geometric" (default): pipeline MCP de siempre, intacto.
     # "corridor_astar" (solo od_pair): A* jerarquico dirigido 1->1; calcula la
     # ruta aqui mismo (una sola busqueda) y escribe el registro en el MISMO
-    # GPKG/flujo de salidas. Las secciones propias del pipeline MCP (memmap,
-    # huella de reanudacion, warm-up, Fases 1 y 2) quedan acotadas con
-    # _KERNEL_CORRIDOR: en modo corridor no se ejecutan.
+    # GPKG/flujo de salidas. Con _KERNEL_CORRIDOR no se ejecutan: la escritura
+    # del memmap, la huella de reanudacion y el warm-up de numba. Las Fases
+    # 1 y 2 SI corren sus bloques (prints ya acotados arriba), pero SIN
+    # tareas: los Parallel sobre listas vacias no lanzan workers.
     _KERNEL_CORRIDOR = _IS_OD and KERNEL == "corridor_astar"
     if _KERNEL_CORRIDOR:
         t0_kernel = time.time()
@@ -1388,8 +1389,10 @@ try:
 
         if not _KERNEL_CORRIDOR:
             dur_p2 = time.time() - t0_p2
-        print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
-        print(f"  Rutas reconstruidas: {n_rutas_escritas}")
+            # R3-001 (revision): en corridor la Fase 2 no corre; sus
+            # banners confundirian la lectura de tiempos y rutas.
+            print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
+            print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
         # --- PASO 5: GeoPackage (rename atomico del temporal) ---
         print("\n[Paso 5/5] Escribiendo GeoPackage unificado...")
@@ -1534,8 +1537,10 @@ try:
 
         if not _KERNEL_CORRIDOR:
             dur_p2 = time.time() - t0_p2
-        print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
-        print(f"  Rutas reconstruidas: {n_rutas_escritas}")
+            # R3-001 (revision): en corridor la Fase 2 no corre; sus
+            # banners confundirian la lectura de tiempos y rutas.
+            print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
+            print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
         # --- Reporte final por raiz (S7) ---
         print("\n--- REPORTE POR RAIZ (cross_layers) ---")
