@@ -1014,9 +1014,10 @@ try:
     # "corridor_astar" (solo od_pair): A* jerarquico dirigido 1->1; calcula la
     # ruta aqui mismo (una sola busqueda) y escribe el registro en el MISMO
     # GPKG/flujo de salidas. Con _KERNEL_CORRIDOR no se ejecutan: la escritura
-    # del memmap, la huella de reanudacion y el warm-up de numba. Las Fases
-    # 1 y 2 SI corren sus bloques (prints ya acotados arriba), pero SIN
-    # tareas: los Parallel sobre listas vacias no lanzan workers.
+    # del memmap, la huella de reanudacion, el warm-up de numba y TODOS los
+    # banners de Fase 1/2. Los bloques de Fase 1/2 corren SIN tareas (los
+    # Parallel sobre listas vacias no lanzan workers) y sus banners solo se
+    # emiten en modo MCP: en corridor la Fase 2 no produce trabajo ni salida.
     _KERNEL_CORRIDOR = _IS_OD and KERNEL == "corridor_astar"
     if _KERNEL_CORRIDOR:
         t0_kernel = time.time()
@@ -1359,7 +1360,10 @@ try:
                 (origin_id, origin_coords, dest_items, cost_scalars, transform, PHASE1_DIR)
             )
 
-        print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
+        # R2-partial-corridor-gating (revision): en corridor Fase 2 no tiene
+        # tareas; el banner solo tiene sentido en modo MCP.
+        if not _KERNEL_CORRIDOR:
+            print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
         t0_p2 = time.time()
 
         # S1: generador sin orden -> la memoria solo sostiene UN lote de origen;
@@ -1443,9 +1447,15 @@ try:
         pipeline_ok = True
         total_duration = dur_p1 + dur_p2
         print("\n" + "="*60)
-        print("--- RESUMEN DE EJECUCIÓN (DOS FASES) ---")
-        print(f"  Fase 1 (MCP, {len(tasks_p1)} orígenes):    {dur_p1:.1f} s  ({n_jobs_p1} workers)")
-        print(f"  Fase 2 (rutas, {len(tasks_p2)} orígenes):  {dur_p2:.1f} s  ({n_jobs_p2} workers)")
+        if _KERNEL_CORRIDOR:
+            # R2-partial-corridor-gating (revision): el resumen describe lo
+            # que realmente corrio, sin filas de fases MCP que no ejecutaron.
+            print("--- RESUMEN DE EJECUCIÓN (corridor_astar) ---")
+            print(f"  Kernel corridor_astar (LR + corredor + HR): {dur_p1:.1f} s")
+        else:
+            print("--- RESUMEN DE EJECUCIÓN (DOS FASES) ---")
+            print(f"  Fase 1 (MCP, {len(tasks_p1)} orígenes):    {dur_p1:.1f} s  ({n_jobs_p1} workers)")
+            print(f"  Fase 2 (rutas, {len(tasks_p2)} orígenes):  {dur_p2:.1f} s  ({n_jobs_p2} workers)")
         print(f"  Total:                         {total_duration:.1f} s")
         print(f"  Rutas generadas:               {n_rutas_escritas}")
         print("="*60)
@@ -1535,12 +1545,11 @@ try:
                 # un estado parcial legible.
                 outputs.write_manifest(paths_out, manifest_rows)
 
-        if not _KERNEL_CORRIDOR:
-            dur_p2 = time.time() - t0_p2
-            # R3-001 (revision): en corridor la Fase 2 no corre; sus
-            # banners confundirian la lectura de tiempos y rutas.
-            print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
-            print(f"  Rutas reconstruidas: {n_rutas_escritas}")
+        # R3-002 (revision): aqui el guard seria codigo muerto (_IS_OD y
+        # _IS_CROSS son excluyentes), asi que los banners son incondicionales.
+        dur_p2 = time.time() - t0_p2
+        print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
+        print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
         # --- Reporte final por raiz (S7) ---
         print("\n--- REPORTE POR RAIZ (cross_layers) ---")

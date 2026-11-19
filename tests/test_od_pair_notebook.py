@@ -244,8 +244,15 @@ def test_e2e_corridor_astar_writes_single_route_and_skips_mcp(tmp_path):
     assert np.isfinite(row["cost_total"])
     assert row.geometry.geom_type == "LineString"
     # El branch corridor no debe ejecutar Fase 1 MCP ni reportar tracebacks.
+    # R3-001 (3er review): el gating de banners es comportamiento observable,
+    # asi que el e2e lo aserta sobre el output capturado.
     assert "Tracebacks guardados" not in (_out or "")
     assert "corridor_astar" in (_out or "")
+    assert "Fase 2 completada" not in (_out or "")
+    assert "Rutas reconstruidas" not in (_out or "")
+    assert "Total de orígenes para reconstrucción" not in (_out or "")
+    assert "Fase 2 (rutas," not in (_out or "")
+    assert "RESUMEN DE EJECUCIÓN (corridor_astar)" in (_out or "")
 
 
 def test_e2e_od_pair_missing_selection_shows_preview_and_stops(tmp_path):
