@@ -121,6 +121,8 @@ def _tmp_dir():
     import tempfile
 
     return pathlib.Path(tempfile.mkdtemp())
+
+
 import geopandas as gpd  # noqa: E402
 import notebook_harness as nh  # noqa: E402
 import numpy as np  # noqa: E402
