@@ -113,6 +113,14 @@ def test_cell6_mode_description_mentions_od_pair():
 # ---------------------------------------------------------------------------
 
 import fiona  # noqa: E402
+
+import lcp.data_loader as dl  # noqa: E402
+
+
+def _tmp_dir():
+    import tempfile
+
+    return pathlib.Path(tempfile.mkdtemp())
 import geopandas as gpd  # noqa: E402
 import notebook_harness as nh  # noqa: E402
 import numpy as np  # noqa: E402
@@ -317,3 +325,36 @@ def test_e2e_od_pair_unreachable_destination_reported_not_silent(tmp_path):
     assert not np.isfinite(row["cost_total"])
     # El aviso de coste infinito se imprime: nada se pierde en silencio.
     assert "infinito" in _out
+
+
+def test_cell6_dest_pixels_all_covers_single_origin():
+    # R3-dest-pixels-scope/R4-dest-pixels-mode-gate: single_origin TAMBIEN
+    # referencia dest_pixels_all; la compuerta compartida debe cubrirlo (o
+    # single_origin fallaria con NameError en corridas validas al baseline).
+    src = _source(CELL_EXEC)
+    assert 'ANALYSIS_MODE != "cross_layers"' in src
+
+
+def test_load_point_candidates_warns_fid_fallback_once():
+    # R4-fid-fallback-warning-per-feature: el aviso de compatibilidad se
+    # imprime UNA vez por carga, no una por feature.
+    import io
+    from contextlib import redirect_stdout
+
+    schema = {"geometry": "Point", "properties": {"nombre": "str"}}
+    path = _tmp_dir() / "no_id_field.shp"
+    with fiona.open(
+        str(path), "w", driver="ESRI Shapefile", schema=schema, crs="EPSG:32719"
+    ) as dst:
+        for x, nombre in ((1.0, "a"), (2.0, "b"), (3.0, "c")):
+            dst.write(
+                {
+                    "geometry": mapping(Point(x, 0.0)),
+                    "properties": {"nombre": nombre},
+                }
+            )
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        cands = dl.load_point_candidates(str(path), "id")
+    assert len(cands) == 3
+    assert buf.getvalue().count("ADVERTENCIA") == 1

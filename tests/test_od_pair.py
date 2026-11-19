@@ -241,3 +241,36 @@ def test_select_point_fid_tolerant_to_type_and_actionable_errors():
     # es accionable (lista los fids disponibles).
     with pytest.raises(ValueError, match="fids disponibles"):
         dl.select_point(candidates, "fid", 7.9)
+
+
+# ---------------------------------------------------------------------------
+# Advisorys sustanciosos (G1): rama fid via el normalizador compartido
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_uses_named_null_sentinel():
+    # El sentinel de None es una constante nombrada, no un literal magico.
+    assert dl._NULL_KEY == dl._normalize_value(None)
+
+
+def test_select_point_fid_exact_for_integers_beyond_float_precision():
+    # R3-fid-float-truncation: un fid textual por encima de 2^53 se comparara
+    # EXACTO (int antes que float); la forma float nunca lo trunca.
+    huge = 10**18 + 1
+    candidates = [
+        {"id": 1, "fid": huge, "coords": (1.0, 1.0), "properties": {"id": 1}},
+        {"id": 2, "fid": 5, "coords": (2.0, 2.0), "properties": {"id": 2}},
+    ]
+    assert dl.select_point(candidates, "fid", str(huge))["id"] == 1
+    assert dl.select_point(candidates, "fid", huge)["id"] == 1
+    assert dl.select_point(candidates, "fid", 5.0)["id"] == 2
+
+
+def test_select_point_fid_non_integer_rejected_without_truncation():
+    candidates = [
+        {"id": 1, "fid": 7, "coords": (1.0, 1.0), "properties": {"id": 1}},
+        {"id": 2, "fid": 8, "coords": (2.0, 2.0), "properties": {"id": 2}},
+    ]
+    # 7.9 sigue sin truncarse; el error es accionable.
+    with pytest.raises(ValueError, match="fids disponibles"):
+        dl.select_point(candidates, "fid", 7.9)

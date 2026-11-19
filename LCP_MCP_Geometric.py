@@ -1033,9 +1033,10 @@ try:
             "od_pair", all_points, origin_id=OD_ORIGIN_ID, dest_id=OD_DEST_ID
         )
         n_expected = plan["n_expected"]
-    # od_pair y all_pairs comparten los pixeles de los puntos de la capa unica:
-    # un solo comprehension para ambos modos (edicion en un solo lugar).
-    if ANALYSIS_MODE in ("od_pair", "all_pairs"):
+    # od_pair, all_pairs y single_origin comparten los pixeles de los puntos de
+    # la capa unica (los tres consumen dest_pixels_all abajo): un solo
+    # comprehension para los tres modos (edicion en un solo lugar).
+    if ANALYSIS_MODE != "cross_layers":
         dest_pixels_all = {
             pid: proc.world_to_pixel(transform, coords[0], coords[1])
             for pid, coords in all_points.items()

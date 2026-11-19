@@ -181,17 +181,27 @@ def load_points_as_dict(shapefile_path, id_field):
     return points, crs
 
 
+# Clave de comparacion reservada para atributos NULL: el prefijo NUL no
+# aparece en texto real de atributos, asi que un selector literal 'None'
+# (o cualquier texto) nunca coincide con un valor ausente.
+_NULL_KEY = "\0null"
+
+
 def _normalize_value(value):
     """Normalizes a selector value for type-tolerant comparison (S2).
 
-    Reglas: None es su propia clave (nunca coincide con el texto 'None');
-    los booleanos comparten clave con su texto ('True'/'true'); los enteros
-    (int, str o float entero) se conservan sin pasar por float() para no
-    perder digitos por encima de 2^53; el resto se parsea como numero (.17g)
-    o se compara como texto en minusculas.
+    Reglas: None se mapea a la constante _NULL_KEY (nunca coincide con el
+    texto 'None' ni con ningun otro valor); los booleanos comparten clave
+    con su texto ('True'/'true'); los enteros (int, o texto de entero) se
+    conservan EXACTOS sin pasar por float(), incluidos los de mas de 2^53;
+    un float entero menor que 2^53 tambien se conserva exacto, pero por
+    encima de 2^53 la precision de float es inherente y su clave es la
+    forma .17g (equivalencia garantizada solo entre int y texto entero).
+    El resto se parsea como numero (.17g) o se compara como texto en
+    minusculas.
     """
     if value is None:
-        return "\0null"
+        return _NULL_KEY
     if isinstance(value, bool):
         return str(value).lower()
     if isinstance(value, int):
@@ -229,6 +239,7 @@ def load_point_candidates(path, id_field="id"):
             f"El archivo de puntos no se encontró en la ruta: {path}"
         )
     candidates = []
+    fid_fallback_warned = False
     with fiona.open(path, "r") as c:
         if len(c) == 0:
             raise ValueError(
@@ -249,15 +260,17 @@ def load_point_candidates(path, id_field="id"):
                     f"El campo de ID especificado '{id_field}' no se encuentra "
                     "en las propiedades."
                 )
-            if use_fid:
-                # Mismo aviso de compatibilidad que load_points_as_dict: el
-                # preview nunca debe presentar fids como si fueran ids del
-                # atributo sin advertirlo (R2-3/R3-6).
+            if use_fid and not fid_fallback_warned:
+                # Mismo aviso de compatibilidad que load_points_as_dict, una
+                # sola vez por carga (no una por feature): el preview nunca
+                # debe presentar fids como ids del atributo sin advertirlo
+                # (R2-3/R3-6).
                 print(
                     f"  ADVERTENCIA: Campo '{id_field}' no encontrado en "
                     "propiedades. El preview usa el 'feature.id' (fid) como "
                     "identificador."
                 )
+                fid_fallback_warned = True
             base_id = int(base_id)
             for node_id, coords in _split_point_geometry(geom, base_id):
                 candidates.append(
@@ -285,19 +298,18 @@ def select_point(candidates, field, value):
         raise ValueError("La lista de candidatos de puntos esta vacia.")
 
     if field == "fid":
-        # Tolerancia de tipos compartida con la rama de atributos: '7', 7 y
-        # 7.0 equivalen; un no-entero (7.9) NO se trunca silenciosamente.
-        try:
-            wanted_fid = float(value)
-        except (TypeError, ValueError):
-            wanted_fid = None
-        if wanted_fid is None or not float(wanted_fid).is_integer():
+        # Tolerancia de tipos por el MISMO normalizador que la rama de
+        # atributos: '7', 7 y 7.0 equivalen; un no-entero (7.9) NO se trunca;
+        # y un fid textual por encima de 2^53 se compara EXACTO (sin el
+        # redondeo silencioso de float).
+        wanted_key = _normalize_value(value)
+        if not wanted_key.lstrip("-").isdigit():
             fids = sorted(c["fid"] for c in candidates)
             raise ValueError(
                 f"El valor {value!r} no es un fid valido (entero). "
                 f"fids disponibles: {fids}"
             )
-        wanted_fid = int(wanted_fid)
+        wanted_fid = int(wanted_key)
         matches = [c for c in candidates if c["fid"] == wanted_fid]
         if not matches:
             fids = sorted(c["fid"] for c in candidates)
