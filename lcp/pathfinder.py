@@ -446,26 +446,41 @@ def corridor_astar_route(
     parametro que mas afecta si el corredor contiene la ruta optima.
     Cambiarlos cambia la calidad de la ruta silenciosamente.
 
-    R3-astar-heuristic-admissibility (revision): con `heuristic_weight=1.0`
-    la heuristica euclidiana es admisible SOLO si todo coste de celda es
-    >= 1.0; en superficies con costes < 1.0 puede sobreestimar y la ruta
-    puede ser suboptima bajo el propio modelo del kernel. Si se detecta
-    una superficie con costes < 1.0 y weight > 0, se emite una ADVERTENCIA
-    en runtime. `heuristic_weight=0` convierte la busqueda en Dijkstra
-    exacto (mas lento, sin direccion y siempre admisible).
+    R3-astar-heuristic-admissibility (revision): la heuristica euclidiana
+    ponderada es admisible solo si heuristic_weight <= minimo de coste
+    transitable de la superficie; si weight lo excede puede sobreestimar
+    y la ruta puede ser suboptima bajo el propio modelo del kernel. La
+    deteccion es runtime: con weight > 0 y weight > min_coste se emite
+    una ADVERTENCIA que sugiere bajar HEURISTIC_WEIGHT (R2/R3 del quinto
+    review: la condicion es weight-relativa, no el umbral fijo 1.0, que
+    dejaba sin aviso a weight > 1.0 con costes en [1.0, weight) y avisaba
+    en vano con 0 < weight < min_coste). `heuristic_weight=0` convierte
+    la busqueda en Dijkstra exacto (mas lento, sin direccion y siempre
+    admisible). Un weight negativo levanta ValueError: premia alejarse
+    del objetivo y produce rutas arbitrarias.
     """
     import lcp.processing as proc
 
     start_pixel = (int(start_pixel[0]), int(start_pixel[1]))
     end_pixel = (int(end_pixel[0]), int(end_pixel[1]))
 
+    # R3-heuristic-weight-unvalidated (quinto review): un weight negativo
+    # hace f = g + w*h premiar la lejania del objetivo y bypassuea el guard
+    # de abajo (que exige weight > 0): rechazo explicito.
+    if heuristic_weight < 0:
+        raise ValueError(
+            f"HEURISTIC_WEIGHT no puede ser negativo: {heuristic_weight}. "
+            "Un peso negativo premia alejarse del objetivo y produce rutas "
+            "arbitrarias; use 0 (Dijkstra exacto) o un valor positivo."
+        )
+
     # S6/R3-heuristic-admissibility-no-runtime-guard: con weight > 0, la
-    # heuristica euclidiana sobreestima el coste restante si alguna celda
-    # transitable tiene coste < 1.0 (la ruta puede ser suboptima bajo el
-    # propio modelo del kernel). Deteccion runtime con un solo pase sobre
-    # las celdas transitables (excluye inf/nodata/NaN): aceptable porque
-    # corridor_astar solo corre 1->1. weight=0 equivale a Dijkstra exacto
-    # y siempre es admisible: sin aviso.
+    # heuristica euclidiana sobreestima el coste restante cuando weight
+    # excede el minimo de coste transitable (la ruta puede ser suboptima
+    # bajo el propio modelo del kernel). Deteccion runtime weight-relativa
+    # con un solo pase sobre las celdas transitables (excluye
+    # inf/nodata/NaN): aceptable porque corridor_astar solo corre 1->1.
+    # weight=0 equivale a Dijkstra exacto y siempre es admisible: sin aviso.
     if heuristic_weight > 0 and search_mask.any():
         _traversable = cost_data[search_mask]
         _traversable = _traversable[
@@ -473,13 +488,14 @@ def corridor_astar_route(
         ]
         if _traversable.size:
             _min_cost = float(np.nanmin(_traversable))
-            if _min_cost < 1.0:
+            if _min_cost < heuristic_weight:
                 print(
-                    f"  ADVERTENCIA: hay celdas transitables con coste < 1.0 "
-                    f"(minimo {_min_cost:.4g}) y heuristic_weight={heuristic_weight}: "
-                    "la heuristica euclidiana puede sobreestimar y la ruta puede ser "
-                    "suboptima. Define HEURISTIC_WEIGHT=0 (Dijkstra exacto, mas "
-                    "lento) si la optimalidad importa."
+                    f"  ADVERTENCIA: el minimo de coste transitable "
+                    f"({_min_cost:.4g}) es menor que heuristic_weight="
+                    f"{heuristic_weight}: la heuristica euclidiana puede "
+                    "sobreestimar y la ruta puede ser suboptima. Baje "
+                    f"HEURISTIC_WEIGHT a <= {_min_cost:.4g} (o 0 = Dijkstra "
+                    "exacto, mas lento) si la optimalidad importa."
                 )
 
     path_pixels_lr = None

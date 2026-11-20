@@ -314,10 +314,11 @@ ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin" | "cross_layers" |
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
 KERNEL = "mcp_geometric"   # "mcp_geometric" (default, todos los modos) | "corridor_astar" (solo od_pair)
 # Peso de la heuristica euclidiana del kernel corridor_astar (solo od_pair).
-# 1.0 (default) es admisible SOLO si todo coste de celda de la superficie es
-# >= 1.0; si hay costes menores, el kernel avisa en runtime (R3-admissibility)
-# y la ruta puede ser suboptima bajo su propio modelo. 0 = Dijkstra exacto
-# (mas lento, sin direccion al objetivo y siempre admisible).
+# La busqueda es admisible (optima bajo el modelo del kernel) mientras
+# weight <= minimo de coste transitable: con costes < 1.0 el default 1.0
+# sobreestima; el kernel avisa en runtime y sugiere bajar HEURISTIC_WEIGHT.
+# 0 = Dijkstra exacto (mas lento, sin direccion al objetivo, siempre
+# admisible). Un valor negativo aborta con ValueError.
 HEURISTIC_WEIGHT = 1.0
 RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
@@ -1152,9 +1153,7 @@ try:
                 for pid, coords in all_points.items()
             }
 
-    # Sin huella de reanudacion en corridor: esta seccion es MCP-only y vive
-    # dentro del else del kernel (R2-corridor-gating-scatter).
-        # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
+        # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster); MCP-only (dentro del else del kernel) ---
         import hashlib
         import json as _json
 
@@ -1399,8 +1398,9 @@ try:
                 n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
             )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
 
-            # corridor_astar ya escribio el temporal con su ruta; no se borra.
-            if not _KERNEL_CORRIDOR and os.path.exists(gpkg_tmp_path):
+            # La Fase 2 MCP escribe desde cero: un temporal previo (corrida
+            # abortada) se elimina antes del primer lote.
+            if os.path.exists(gpkg_tmp_path):
                 os.remove(gpkg_tmp_path)
             with tqdm(
                 total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None

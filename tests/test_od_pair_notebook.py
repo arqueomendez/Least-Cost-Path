@@ -114,12 +114,15 @@ def test_cell6_phase1_single_task_for_od_pair():
     # R2-brittle-test-pin/R3-002 (revision): el match se hace sobre el source
     # NORMALIZADO (whitespace colapsado) para no romper con un re-indentado
     # inocente del notebook, sin dejar de exigir el root exacto.
-    # R2-corridor-gating-scatter (4to review): el switch del kernel vive en un
-    # UNICO if/else en la Celda 6; el task MCP queda dentro de la rama MCP
-    # (else). Solo quedan DOS referencias de gating: el split y el texto del
-    # resumen, mas el guard conservado del tmp (implicito dentro del else).
-    assert src.count("if _KERNEL_CORRIDOR") == 2
-    assert src.count("if not _KERNEL_CORRIDOR") == 1
+    # R2-corridor-gating-scatter (4to review) + R2-brittle-count-pin (5to
+    # review): el invariant real del S1 es que NO quedan guards dispersos
+    # 'if not _KERNEL_CORRIDOR' (el switch vive en el UNICO if/else de la
+    # Celda 6) y que el guard del tmp quedo simplificado a os.path.exists
+    # dentro de la rama MCP. Se pina por presencia/ausencia, no por counts
+    # fragiles que un guard legitimo futuro romperia.
+    assert "if _KERNEL_CORRIDOR:" in src
+    assert src.count("if not _KERNEL_CORRIDOR") == 0
+    assert "if not _KERNEL_CORRIDOR and os.path.exists" not in src
     normalized = " ".join(src.split())
     assert "tasks_p1.append( (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR) )" in normalized
 

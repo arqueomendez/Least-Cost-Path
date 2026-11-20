@@ -166,11 +166,14 @@ class TestAStarOpenSetHeap:
 
 
 class TestHeuristicAdmissibility:
-    """S6/R3-heuristic-admissibility-no-runtime-guard: con weight > 0 la
-    heuristica euclidiana solo es admisible si todo coste transitable es >= 1.0;
-    corridor_astar_route debe detectarlo y avisar en runtime."""
+    """S6/R3-heuristic-admissibility-no-runtime-guard + quinto review
+    (R2-overbroad/R3-constant-threshold): la heuristica euclidiana ponderada
+    es admisible solo si weight <= minimo de coste transitable; el aviso
+    runtime es weight-relativo (no el umbral fijo 1.0) y un weight negativo
+    levanta ValueError."""
 
     def test_warns_when_costs_below_one(self, capsys):
+        # costs 0.5 con weight default 1.0: weight > min_cost -> aviso.
         surface = np.full((40, 40), 0.5, dtype=np.float64)
         path, cost_total = pf.corridor_astar_route(
             surface, -9999.0, 1.0, 1.0, (5, 5), (35, 35), _empty_mask(surface.shape)
@@ -195,6 +198,59 @@ class TestHeuristicAdmissibility:
         )
         out = capsys.readouterr().out
         assert "ADVERTENCIA" not in out
+
+    def test_no_warning_when_weight_at_or_below_min_cost(self, capsys):
+        # R2-admissibility-warning-overbroad (quinto review): con weight <=
+        # min_coste la busqueda es admisible aunque los costes sean < 1.0;
+        # avisar seria un falso positivo.
+        surface = np.full((40, 40), 0.5, dtype=np.float64)
+        path, cost_total = pf.corridor_astar_route(
+            surface,
+            -9999.0,
+            1.0,
+            1.0,
+            (5, 5),
+            (35, 35),
+            _empty_mask(surface.shape),
+            heuristic_weight=0.5,
+        )
+        assert path is not None and np.isfinite(cost_total)
+        out = capsys.readouterr().out
+        assert "ADVERTENCIA" not in out
+
+    def test_warns_when_weight_exceeds_min_cost_above_one(self, capsys):
+        # R3-admissibility-guard-constant-threshold (quinto review): costes en
+        # [1.0, weight) con weight > 1.0 son inadmisibles y ANTES no avisaban.
+        surface = np.full((40, 40), 1.5, dtype=np.float64)
+        path, cost_total = pf.corridor_astar_route(
+            surface,
+            -9999.0,
+            1.0,
+            1.0,
+            (5, 5),
+            (35, 35),
+            _empty_mask(surface.shape),
+            heuristic_weight=2.0,
+        )
+        assert path is not None and np.isfinite(cost_total)
+        out = capsys.readouterr().out
+        assert "ADVERTENCIA" in out
+
+    def test_negative_weight_raises(self):
+        # R3-heuristic-weight-unvalidated (quinto review): un weight negativo
+        # premia alejarse del objetivo; rechazo explicito, nunca ruta silenciosa.
+        surface = _surface_with_barrier()
+        with pytest.raises(ValueError, match="negativo"):
+            pf.corridor_astar_route(
+                surface,
+                -9999.0,
+                1.0,
+                1.0,
+                (100, 100),
+                (500, 500),
+                _empty_mask(surface.shape),
+                heuristic_weight=-0.5,
+            )
 
     def test_no_warning_with_weight_zero_on_cheap_surface(self, capsys):
         # weight=0 equivale a Dijkstra exacto: siempre admisible, sin aviso.
