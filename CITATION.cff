@@ -1,15 +1,18 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
+title: "Least-Cost-Path: A Python tool for Least Cost Path analysis in archaeology"
+abstract: "Least-Cost-Path (LCP) computes least-cost routes over raster friction surfaces for archaeology. Supports four analysis modes (all_pairs, single_origin, cross_layers, od_pair), two computation kernels (Dijkstra-based MCP_Geometric and a hierarchical directed A* corridor_astar), route densification and QGIS-style kernel density heatmaps, with two-phase parallel execution, resumable tracebacks and atomic GeoPackage outputs."
 authors:
   - family-names: "Méndez"
-    given-names: "Víctor" # Reemplazar con el nombre real del autor
-    orcid: "https://orcid.org/0000-0002-3453-3708" # Opcional, pero recomendado
-title: "Least-Cost-Path: A Python tool for Least Cost Path analysis in archaeology"
-date-released: 2026-10-23 # Fecha de la publicación o del último cambio importante
+    given-names: "Víctor"
+    orcid: "https://orcid.org/0000-0002-3453-3708"
+version: v0.1.0
+date-released: "2026-11-20"
+license: CC-BY-NC-4.0
 repository-code: "https://github.com/arqueomendez/Least-Cost-Path"
 keywords:
-  - "Least Cost Path"
+  - "Least-Cost-Path"
+  - "Shortest Path"
   - "Archaeology"
   - "GIS"
   - "Python"
-license: CC BY-NC 4.0
