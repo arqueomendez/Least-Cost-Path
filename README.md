@@ -1,5 +1,7 @@
 # LCP_MCP_Geometric
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17172977.svg)](https://doi.org/10.5281/zenodo.17172977)
+
 LCP_MCP_Geometric es una herramienta de análisis espacial para el cálculo de rutas de menor coste entre múltiples puntos sobre superficies raster, orientada a aplicaciones arqueológicas: modelar movimientos en el territorio a partir de un ráster de fricción o coste. El motor MCP es `skimage.graph.MCP_Geometric` (Dijkstra exacto, 8 vecinos) y la reconstrucción de caminos está acelerada con Numba JIT.
 
 - **4 modos de análisis**: red completa (`all_pairs`), modo estrella (`single_origin`), dos capas (`cross_layers`) y una única ruta por campo/valor (`od_pair`).
@@ -687,3 +689,17 @@ If you use this software in your research, please cite it as follows:
   year   = {2025}
 }
 ```
+
+## Citación
+
+Si usas este software, por favor cítalo. El DOI del concepto
+[10.5281/zenodo.17172977](https://doi.org/10.5281/zenodo.17172977) siempre
+resuelve a la última versión publicada:
+
+> Méndez, V. (2026). Least-Cost-Path: A Python tool for Least Cost Path
+> analysis in archaeology (Version v0.1.0) [Computer software].
+> https://doi.org/10.5281/zenodo.17172977
+
+La metadata de citación legible por máquina vive en
+[`CITATION.cff`](CITATION.cff); cada versión publicada tiene su record en
+Zenodo vía la integración GitHub-Zenodo.
