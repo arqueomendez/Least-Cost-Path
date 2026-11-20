@@ -240,7 +240,7 @@ class TestHeuristicAdmissibility:
         # R3-heuristic-weight-unvalidated (quinto review): un weight negativo
         # premia alejarse del objetivo; rechazo explicito, nunca ruta silenciosa.
         surface = _surface_with_barrier()
-        with pytest.raises(ValueError, match="negativo"):
+        with pytest.raises(ValueError, match="invalido"):
             pf.corridor_astar_route(
                 surface,
                 -9999.0,
@@ -250,6 +250,23 @@ class TestHeuristicAdmissibility:
                 (500, 500),
                 _empty_mask(surface.shape),
                 heuristic_weight=-0.5,
+            )
+
+    @pytest.mark.parametrize("bad_weight", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_weight_raises(self, bad_weight):
+        # R3-001 (sexto review): NaN/inf pasan ambos umbrales (< 0 y > 0) y
+        # corrompen el puntaje f = g + w*h en silencio; rechazo explicito.
+        surface = _surface_with_barrier()
+        with pytest.raises(ValueError, match="invalido"):
+            pf.corridor_astar_route(
+                surface,
+                -9999.0,
+                1.0,
+                1.0,
+                (100, 100),
+                (500, 500),
+                _empty_mask(surface.shape),
+                heuristic_weight=bad_weight,
             )
 
     def test_no_warning_with_weight_zero_on_cheap_surface(self, capsys):

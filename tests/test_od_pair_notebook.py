@@ -122,7 +122,6 @@ def test_cell6_phase1_single_task_for_od_pair():
     # fragiles que un guard legitimo futuro romperia.
     assert "if _KERNEL_CORRIDOR:" in src
     assert src.count("if not _KERNEL_CORRIDOR") == 0
-    assert "if not _KERNEL_CORRIDOR and os.path.exists" not in src
     normalized = " ".join(src.split())
     assert "tasks_p1.append( (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR) )" in normalized
 

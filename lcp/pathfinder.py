@@ -456,22 +456,25 @@ def corridor_astar_route(
     dejaba sin aviso a weight > 1.0 con costes en [1.0, weight) y avisaba
     en vano con 0 < weight < min_coste). `heuristic_weight=0` convierte
     la busqueda en Dijkstra exacto (mas lento, sin direccion y siempre
-    admisible). Un weight negativo levanta ValueError: premia alejarse
-    del objetivo y produce rutas arbitrarias.
+    admisible). Un weight no finito (NaN/inf) o negativo levanta ValueError:
+    premia alejarse del objetivo y produce rutas arbitrarias.
     """
     import lcp.processing as proc
 
     start_pixel = (int(start_pixel[0]), int(start_pixel[1]))
     end_pixel = (int(end_pixel[0]), int(end_pixel[1]))
 
-    # R3-heuristic-weight-unvalidated (quinto review): un weight negativo
-    # hace f = g + w*h premiar la lejania del objetivo y bypassuea el guard
-    # de abajo (que exige weight > 0): rechazo explicito.
-    if heuristic_weight < 0:
+    # R3-heuristic-weight-unvalidated (quinto review) + R3-001 (sexto
+    # review): un weight negativo hace f = g + w*h premiar la lejania del
+    # objetivo y bypassuea el guard de abajo; NaN/inf pasan ambos umbrales
+    # (< 0 y > 0) y corrompen el puntaje en silencio. Rechazo explicito de
+    # todo weight no finito o negativo.
+    if not math.isfinite(heuristic_weight) or heuristic_weight < 0:
         raise ValueError(
-            f"HEURISTIC_WEIGHT no puede ser negativo: {heuristic_weight}. "
-            "Un peso negativo premia alejarse del objetivo y produce rutas "
-            "arbitrarias; use 0 (Dijkstra exacto) o un valor positivo."
+            f"HEURISTIC_WEIGHT invalido: {heuristic_weight}. Debe ser un "
+            "numero finito no negativo (0 = Dijkstra exacto); un peso "
+            "negativo premia alejarse del objetivo y NaN/inf corrompen el "
+            "puntaje f = g + w*h."
         )
 
     # S6/R3-heuristic-admissibility-no-runtime-guard: con weight > 0, la
