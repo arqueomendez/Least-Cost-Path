@@ -1,56 +1,174 @@
 # LCP_MCP_Geometric
 
-## Descripción
+LCP_MCP_Geometric es una herramienta de análisis espacial para el cálculo de rutas de menor coste entre múltiples puntos sobre superficies raster, orientada a aplicaciones arqueológicas: modelar movimientos en el territorio a partir de un ráster de fricción o coste. El motor MCP es `skimage.graph.MCP_Geometric` (Dijkstra exacto, 8 vecinos) y la reconstrucción de caminos está acelerada con Numba JIT.
 
-LCP_MCP_Geometric es una herramienta de análisis espacial para el cálculo de rutas de menor coste entre múltiples puntos sobre superficies raster. Utiliza el algoritmo `MCP_Geometric` de scikit-image para propagar una superficie de coste acumulado desde cada origen y, a continuación, reconstruye los caminos óptimos mediante traceback con Numba JIT. Ha sido desarrollado para aplicaciones arqueológicas, con el objetivo de modelar movimientos en el territorio a partir de un ráster de fricción o coste.
+- **4 modos de análisis**: red completa (`all_pairs`), modo estrella (`single_origin`), dos capas (`cross_layers`) y una única ruta por campo/valor (`od_pair`).
+- **2 kernels de cálculo**: `mcp_geometric` (default, todos los modos) y `corridor_astar` (A* jerárquico dirigido al objetivo, solo `od_pair`).
+- **Ejecución paralela en dos fases** con joblib, auto-detección de workers por RAM disponible, reanudación (`RESUME`) y escritura atómica e incremental.
+- **Post-procesamiento**: puntos densificados vectorizados (Celda 8) y mapas de calor KDE estilo QGIS (Celda 9).
+- Suite de **285 tests** pytest, lint con `ruff`, ejecución parametrizada con `papermill`.
 
-La herramienta calcula el conjunto completo de rutas entre todos los pares de puntos de una red (análisis N×N), almacenando únicamente el triángulo superior de la matriz OD para evitar duplicar rutas simétricas.
+## Diagrama del flujo completo
 
-## Características principales
+El flujo completo del notebook `LCP_MCP_Geometric.ipynb` (9 celdas de código, cada una precedida de su celda markdown explicativa en español):
 
-- Implementa `MCP_Geometric` (scikit-image) como motor de propagación de costes, con soporte de conectividad completa (8 vecinos).
-- Reconstrucción del traceback acelerada con Numba JIT (`@njit`).
-- Análisis N×N deduplicado: para N puntos se calculan N×(N-1)/2 rutas únicas (triángulo superior de la matriz OD), evitando recalcular pares simétricos.
-- **Modo `single_origin` (1 contra todos)**: con `ANALYSIS_MODE = "single_origin"` y un `ORIGIN_ID`, solo se calculan las N−1 rutas desde ese origen hacia el resto (estilo SSSP / `source=` de NetworkX), sin pares entre los destinos. Se elige editando la Celda 3 o desde CLI con `papermill -p` (ver sección propia).
-- **Modo `od_pair` (una única ruta origen → destino por campo y valor)**: con `ANALYSIS_MODE = "od_pair"` se calcula **una sola ruta** entre un punto de inicio y un punto de destino de la **misma capa**, elegidos por **campo y valor** (`ORIGIN_SELECT_FIELD`/`ORIGIN_SELECT_VALUE` y `DEST_SELECT_FIELD`/`DEST_SELECT_VALUE`, por defecto el atributo `id`). El selector es **estricto y sin fallback silencioso al fid**: campo inexistente o valor ambiguo abortan listando las opciones disponibles; con los valores en `None` la Celda 4 imprime la **tabla de candidatos** (id, fid, coordenadas y píxel) y detiene la ejecución (ver «Modo od_pair»).
-- **Modo `cross_layers` (una capa de orígenes contra una capa de destinos)**: con `ANALYSIS_MODE = "cross_layers"` se calculan las rutas de **cada** punto de `ORIGIN_POINTS_PATH` hacia **todos** los de `DEST_POINTS_PATH` (M×N), con **una corrida MCP por raíz** y salidas **no unificadas**: un GPKG, un mapa, un densificado y un KDE por raíz, más un manifiesto CSV. Admite invertir la dirección cuando las fuentes son menos que los sitios (ver «Modo cross_layers»).
-- **Ejecución paralela en dos fases con joblib** (`loky` backend): el análisis se divide en Fase 1 (calcular y guardar superficies de coste por origen) y Fase 2 (reconstruir rutas desde disco). El número de workers se auto-detecta según la RAM disponible para cada fase. El ráster se comparte mediante un archivo `memmap` en disco.
-- Permite restringir el área de búsqueda a un polígono vectorial (shapefile o GeoPackage) para excluir zonas no accesibles.
-- Escribe los resultados de forma **incremental**: cada lote de la Fase 2 va directo a `red_completa_unificada.gpkg.tmp` y se renombra de forma atómica al final — nunca acumula todas las rutas en RAM ni deja un GPKG parcial — con atributos enriquecidos por ruta.
-- Verbosidad configurable mediante el parámetro `VERBOSE`.
-- Incluye celdas de validación de datos de entrada y visualización diagnóstica.
-- **Post-procesamiento**: generación de puntos densificados sobre rutas (Celda 8) y mapas de calor tipo QGIS (Celda 9).
+```mermaid
+flowchart TD
+    C1["Celda 1 - Importaciones<br/>numpy - rasterio - fiona - geopandas - skimage - numba<br/>y el paquete lcp"]
+    C2["Celda 2 - Hardware y workers<br/>RAM - nucleos fisicos/logicos - disco<br/>modelo medido de memoria: 76 B por pixel y worker en Fase 1<br/>y 2 B por pixel en Fase 2<br/>sugerencia de workers con MAX_WORKERS_PHASE1 como tope<br/>+ warm_up_numba"]
+    C3["Celda 3 - Parametros de usuario<br/>ANALYSIS_MODE: all_pairs - single_origin - cross_layers - od_pair<br/>KERNEL: mcp_geometric - corridor_astar<br/>HEURISTIC_WEIGHT - rutas de datos - EDGE_BUFFER_PX<br/>RESUME - MAX_WORKERS_PHASE1 - SPACING_M - HEATMAP_*"]
+    C4["Celda 4 - Validacion de coherencia<br/>CRS identicos raster/puntos/mascara - solape espacial<br/>todos los puntos en pixeles validos - mascara no total<br/>mismo pixel sitio/fuente en cross_layers<br/>selector estricto de od_pair con preview de candidatos<br/>check_kernel: corridor_astar solo en od_pair"]
+    C5["Celda 5 - Mapa diagnostico del raster con los puntos<br/>origen resaltado en single_origin - dos capas en cross_layers"]
+    C6{"Celda 6 - Ejecucion principal<br/>según KERNEL"}
+
+    K1["Kernel corridor_astar - solo od_pair<br/>una ruta directa 1 a 1 sin dos fases paralelas"]
+    KR["A* jerarquico: Fase 1 en baja resolucion<br/>factores 32 - 20 - 10, primer exito gana"]
+    KC["Corredor: buffer de 150 px alrededor de la ruta LR<br/>intersectado con la mascara de estudio"]
+    KH["Fase 2 en alta resolucion dentro del corredor<br/>sin ruta en el corredor - Plan B: A* en toda la mascara"]
+    KG["GPKG unificado con la unica ruta<br/>capas rutas_unificadas y destinos_inalcanzables siempre presentes"]
+
+    M1["Paso 2 - Memmap compartido del raster en disco<br/>huella de reanudacion: modo - origen - par od - direccion<br/>puntos - identidad del raster - mascara - EDGE_BUFFER_PX<br/>en phase1_meta.json"]
+    P1["Paso 3 - Fase 1: MCP en paralelo por raiz u origen<br/>MCP_Geometric sobre el memmap - guarda el traceback int16<br/>en phase1_tracebacks/traceback_id.npz + escalares de coste<br/>RESUME: reutiliza los npz con la misma huella<br/>fail-hard: un worker fallido detiene antes de escribir"]
+    P2["Paso 4 - Fase 2: reconstruccion streaming con Numba njit<br/>cada lote se escribe directo al GPKG temporal<br/>sin acumular rutas en RAM"]
+    MG["Paso 5 - Escritura final atomica<br/>modos legacy: red_completa_unificada.gpkg<br/>capas rutas_unificadas y destinos_inalcanzables<br/>cross_layers: un GPKG por raiz en rutas_por_origen<br/>+ manifest_rutas_por_origen.csv reescrito tras cada raiz"]
+
+    C7["Celda 7 - Mapa final de la red<br/>con escala y norte - CRS armonizado<br/>un PNG por raiz en cross_layers"]
+    C8["Celda 8 - Puntos densificados sobre las rutas<br/>SPACING_M metros - Shapely 2.0 vectorizado<br/>columna route_idx"]
+    C9["Celda 9 - Mapa de calor KDE estilo QGIS<br/>HEATMAP_RES_M - HEATMAP_BANDWIDTH_M - HEATMAP_KERNEL<br/>binning numpy + convolucion FFT scipy.fft<br/>georreferenciacion exacta - GeoTIFF + PNG"]
+
+    C1 --> C2 --> C3 --> C4 --> C5 --> C6
+    C6 -- "corridor_astar, solo od_pair" --> K1
+    K1 --> KR --> KC --> KH --> KG
+    C6 -- "mcp_geometric, default, todos los modos" --> M1
+    M1 --> P1 --> P2 --> MG
+    MG --> C7 --> C8 --> C9
+    KG --> C7
+```
+
+Las secciones de este README están mapeadas a las etapas del diagrama: «Método de trabajo» describe cada celda en orden, «Modos de análisis» y «Kernel de cálculo» detallan las dos ramas de la Celda 6, «Formato de salida» describe los artefactos de la escritura final, y «Post-procesamiento» cubre las Celdas 8 y 9.
 
 ## Estructura del proyecto
 
 ### Carpetas principales
 
 - **`data/`**: Archivos de entrada (ráster de coste, shapefile/GeoPackage de puntos, máscara poligonal).
-- **`output/`**: Resultados de cada sesión, organizados por marca de tiempo. Contiene el GeoPackage unificado de rutas.
+- **`output/`**: Resultados de cada sesión, organizados por marca de tiempo (ignorado por git).
 - **`lcp/`**: Módulo principal con la lógica del proyecto:
-  - `data_loader.py`: Carga el ráster, los puntos y la máscara vectorial.
+  - `data_loader.py`: Carga el ráster, los puntos y la máscara vectorial; valida IDs duplicados y explota `MultiPoint`. Incluye `load_point_candidates` + `select_point`: selección estricta de UN punto por campo/valor para `od_pair`, sin fallback silencioso al fid.
   - `processing.py`: Procesamiento raster, creación de máscaras y conversión de coordenadas mundo↔píxel.
-  - `pathfinder.py`: Motor de coste (`MCP_Geometric`), reconstrucción de traceback con Numba, y worker de Fase 1 (`compute_and_save_cost_surface`).
-  - `postprocessing.py`: Extrae todas las rutas desde un origen dado, filtrando pares ya calculados (`dest_id > origin_id`), y worker de Fase 2 (`reconstruct_routes_from_disk`; también la variante invertida del modo de dos capas, `reconstruct_inverted_routes_from_disk`).
-  - `planner.py`: Planificador puro (sin E/S) de pares por raíz MCP para los tres modos (`build_pair_plan`) y detección de pares que caen en el mismo píxel (`identical_pixel_pairs`).
+  - `pathfinder.py`: Motor MCP (`MCP_Geometric`), reconstrucción de traceback con Numba, worker de Fase 1 (`compute_and_save_cost_surface`) y el kernel alternativo `corridor_astar_route`.
+  - `postprocessing.py`: Extracción de rutas desde disco (worker de Fase 2), con la variante invertida de `cross_layers` (`reconstruct_inverted_routes_from_disk`) y el descarte de costes no finitos.
+  - `planner.py`: Planificador puro (sin E/S) de pares por raíz MCP para los cuatro modos (`build_pair_plan`) y detección de pares en el mismo píxel (`identical_pixel_pairs`).
   - `outputs.py`: Nombres canónicos de los artefactos por raíz, manifiesto CSV y escritura atómica por archivo.
+  - `resources.py`: Modelo de memoria por worker medido (76 B/px en Fase 1, 2 B/px en Fase 2), detección de hardware y sugerencia de workers.
   - `utils.py`: Construcción del registro de ruta (`build_route_record`) y guardado legacy a shapefile.
   - `__init__.py`: Inicialización del paquete.
 
 ### Archivos principales
 
-- **`LCP_MCP_Geometric.ipynb`**: Notebook principal de ejecución paso a paso, visualización y exportación de resultados (9 celdas).
-- **`tests/`**: Suite de pytest (`uv run pytest tests/`): unitarias de `lcp/` + roundtrip Fase 1 → Fase 2.
+- **`LCP_MCP_Geometric.ipynb`**: Notebook principal de ejecución paso a paso (9 celdas de código).
+- **`tests/`**: Suite de pytest (`uv run pytest tests/` — 285 tests).
 - **`run_notebook.py`**: Ejecuta el notebook de forma no interactiva con nbconvert (timeout 30 min/celda).
 - **`LCP_MCP_Geometric.py`**: Export del notebook; se regenera con `uv run jupyter nbconvert --to script LCP_MCP_Geometric.ipynb` (no editar a mano).
-- **`pyproject.toml`**: Configuración y dependencias del proyecto.
-- **`uv.lock`**: Bloqueo de versiones de dependencias.
-- **`requirements.txt`**: Lista de dependencias en formato pip.
-- **`LICENSE`**: Licencia de uso (CC BY-NC 4.0).
-- **`CITATION.cff`**: Metadatos de citación.
+- **`pyproject.toml`** / **`uv.lock`**: Configuración, dependencias y bloqueo de versiones.
+- **`requirements.txt`**: Volcado fiel de `uv.lock` para la ruta alternativa con `pip`.
 - **`CHANGELOG.md`**: Historial de cambios por hito.
-- **`AGENTS.md`**: Instrucciones para agentes de IA que operen el repositorio.
-- **`README.md`**: Este archivo.
+- **`CITATION.cff`**, **`LICENSE`**: Metadatos de citación y licencia (CC BY-NC 4.0).
+- **`AGENTS.md`**: Instrucciones para agentes de IA que operan el repositorio.
+
+## Características principales
+
+- **Motor MCP con conectividad completa**: `MCP_Geometric` de scikit-image (Dijkstra exacto con coste geométrico, 8 vecinos, `fully_connected=True`).
+- **Traceback acelerado y acotado**: reconstrucción con Numba `@njit`; el buffer del path está limitado a `filas + columnas` del ráster y todo acceso al traceback es validado (un traceback corrupto devuelve `None` en vez de tumbar el proceso).
+- **Deduplicación por simetría**: en `all_pairs` se calculan N×(N−1)/2 rutas (triángulo superior de la matriz OD); `MCP_Geometric` es simétrico, así que la ruta O→P es idéntica a P→O.
+- **Dos kernels de cálculo**: `mcp_geometric` (default) y `corridor_astar`, un A* jerárquico dirigido al objetivo disponible para una ruta 1→1 en `od_pair` (ver «Kernel de cálculo»).
+- **Arquitectura de dos fases paralelas** (joblib `loky`): Fase 1 calcula y guarda tracebacks en disco; Fase 2 reconstruye rutas desde disco. Los workers se auto-detectan según RAM disponible con un modelo de memoria **medido** (`lcp/resources.py`).
+- **Reanudación (`RESUME`)**: una huella SHA-256 (modo, origen, par od, dirección resuelta, puntos, identidad del ráster, máscara y `EDGE_BUFFER_PX`) en `phase1_meta.json` permite reutilizar los `.npz` sanos y recomputar solo los pendientes tras un fallo de memoria.
+- **Tope de workers de Fase 1 (`MAX_WORKERS_PHASE1`)**: limita manualmente el paralelismo cuando la RAM está compartida; la Celda 6 avisa con los GB implicados y recorta si el valor excede el límite seguro.
+- **Escritura incremental y atómica**: cada lote de la Fase 2 va directo al GPKG temporal y se renombra con `os.replace` al final — nunca se acumulan rutas en RAM ni queda un GPKG parcial.
+- **Fail-hard en Fase 1**: si un worker falla, la ejecución lista los IDs afectados y se detiene **antes** de escribir el GPKG (nunca una red parcial en silencio); los destinos inalcanzables se informan sin bloquear.
+- **Máscara de estudio siempre estricta**: solo son navegables los píxeles cuyo centro cae dentro del polígono (sin corredor perimetral de bajo coste); `EDGE_BUFFER_PX` permite excluir además las N filas/columnas exteriores del ráster.
+- **Entrada de puntos flexible**: `Point` y `MultiPoint` (un MultiPoint de k ≥ 2 coordenadas se explota en k nodos con ids derivados `id*1000+j`).
+- **Selección estricta de puntos (`od_pair`)**: por campo y valor, tolerante a tipos (`"7"`, `7`, `7.0`), sin fallback silencioso al fid y con preview de candidatos cuando los valores quedan en `None`.
+- **Verbosidad configurable** (`VERBOSE`) y celdas de validación y diagnóstico antes de calcular nada.
+
+## Método de trabajo
+
+### Celda 1 — Importaciones
+
+Carga de librerías: `numpy`, `rasterio`, `fiona`, `geopandas`, `scikit-image`, `numba` y los módulos del paquete `lcp`. (La barra de progreso con `tqdm.auto` se importa en la Celda 6.)
+
+### Celda 2 — Hardware, workers y warm-up de Numba
+
+Detecta el hardware (RAM disponible, núcleos físicos/lógicos, disco libre) e imprime el pico estimado por worker y los workers sugeridos usando el modelo **medido** de `lcp/resources.py`: **76 B por píxel y worker** en Fase 1 (+30 MB fijos) y **2 B por píxel** en Fase 2. Un estimador del tipo «ráster × 4,5» predice la mitad y provoca `ArrayMemoryError` en `_offset_edge_map` de skimage (que necesita además un bloque **contiguo** de 2·H·W·8 bytes por worker). También define `warm_up_numba()` (pre-compila la función Numba antes del bucle principal y verifica los offsets de `MCP_Geometric`) y `_calculate_n_jobs_for_phase`, que respeta `MAX_WORKERS_PHASE1` como tope (y el límite de 61 procesos de Windows).
+
+### Celda 3 — Configuración central (etiquetada `parameters`)
+
+Todos los parámetros de usuario, precedida de celdas markdown que documentan los modos **dentro del propio notebook**:
+
+| Parámetro | Descripción |
+|---|---|
+| `COST_RASTER_PATH` | Ruta al ráster de coste/fricción (`.tif`), en CRS proyectado |
+| `ALL_POINTS_SHAPEFILE` | Shapefile o GeoPackage con los puntos de la red (usado por `all_pairs`, `single_origin` y `od_pair`) |
+| `MASK_SHAPEFILE_PATH` | Polígono de restricción espacial (`None` para desactivar) |
+| `ID_FIELD_NAME` | Nombre del campo ID en la capa de puntos |
+| `ANALYSIS_MODE` | `"all_pairs"` (default), `"single_origin"` + `ORIGIN_ID`, `"cross_layers"` (dos capas, M×N) o `"od_pair"` (una única ruta por campo/valor) |
+| `ORIGIN_ID` | ID del punto origen; requerido y validado en modo `single_origin` |
+| `ORIGIN_SELECT_FIELD` / `ORIGIN_SELECT_VALUE`, `DEST_SELECT_FIELD` / `DEST_SELECT_VALUE` | Solo en `od_pair`: campo y valor (número o texto) del punto de inicio y del destino; `None` = tabla de candidatos y detención |
+| `ORIGIN_POINTS_PATH` / `DEST_POINTS_PATH`, `ORIGIN_ID_FIELD` / `DEST_ID_FIELD`, `INVERT_DIRECTION` | Solo en `cross_layers`: capa de sitios, capa de fuentes, campo id de cada capa y política de inversión |
+| `HEATMAP_ORIGIN_IDS` | Solo en `cross_layers`: `None` = un KDE por cada raíz; lista de ids = solo esas raíces |
+| `KERNEL` | `"mcp_geometric"` (default, todos los modos) o `"corridor_astar"` (solo `od_pair`) |
+| `HEURISTIC_WEIGHT` | Solo con `KERNEL="corridor_astar"`: peso de la heurística euclidiana (default `1.0`); `0` = Dijkstra exacto (ver «Kernel de cálculo») |
+| `EDGE_BUFFER_PX` | Excluye las N filas/columnas exteriores del ráster (`0` = nada) para cortar el corredor perimetral cuando el modelo de coste es poco fiable en los límites |
+| `OUTPUT_DIR` | Carpeta de salida (generada automáticamente con marca de tiempo) |
+| `VERBOSE` | `True` imprime detalles por ruta |
+| `KEEP_PHASE1_FILES` | `False` (default) elimina `phase1_tracebacks/` al finalizar; `True` conserva los `.npz` comprimidos |
+| `RESUME` | `True` reutiliza los `.npz` de Fase 1 si la huella coincide |
+| `MAX_WORKERS_PHASE1` | `None` = automático; entero = tope de workers de Fase 1 (se recorta con aviso si excede la RAM segura) |
+| `SPACING_M` | Celda 8: metros entre puntos densificados (default 25.0) |
+| `HEATMAP_RES_M`, `HEATMAP_BANDWIDTH_M`, `HEATMAP_KERNEL` | Celda 9: resolución (30 m), radio (1 km) y kernel (quartic/gaussian/triangular/uniform) |
+
+### Celda 4 — Verificación de coherencia de datos
+
+Valida CRS idénticos (ráster/puntos/máscara), solape espacial y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o `nodata`; los IDs problemáticos se listan). Además:
+
+- `single_origin`: comprueba que el modo sea válido, que haya ≥ 2 puntos y que `ORIGIN_ID` exista.
+- `cross_layers`: valida la política `INVERT_DIRECTION`, el CRS y los píxeles válidos de **ambas** capas, y aborta si un sitio y una fuente caen en el **mismo píxel** (una ruta de longitud cero no se puede representar).
+- `od_pair`: ejecuta el selector estricto por campo/valor (con los valores en `None` imprime la tabla de candidatos y detiene) y llama a `check_kernel`, que rechaza `corridor_astar` fuera de `od_pair`.
+- Avisa si el polígono cubre el 100 % del ráster (entonces no restringe nada).
+
+Cualquier problema **detiene la ejecución** con un mensaje concreto antes de calcular nada.
+
+### Celda 5 — Visualización diagnóstica
+
+Mapa del ráster de coste con los puntos superpuestos para verificar la configuración antes de lanzar el análisis. En `single_origin` resalta el origen con una estrella; en `cross_layers` muestra las dos capas (orígenes en cian, destinos en amarillo).
+
+### Celda 6 — Ejecución principal (dos ramas según `KERNEL`)
+
+**Rama `corridor_astar` (solo `od_pair`)**: calcula la única ruta con el A* jerárquico dirigido al objetivo — sin memmap, sin Fase 1 paralela ni Fase 2 — y escribe el mismo GPKG unificado (ver «Kernel de cálculo»).
+
+**Rama `mcp_geometric` (default)**:
+
+1. Crea la carpeta de sesión y prepara los datos en memoria.
+2. Escribe el ráster en un **memmap compartido** en disco y calcula la **huella de reanudación** (modo, origen, par od, dirección resuelta, puntos, identidad del ráster, máscara y `EDGE_BUFFER_PX`) en `phase1_meta.json`; si la huella no coincide, los `.npz` previos se descartan.
+3. Compila la función Numba con `warm_up_numba()`.
+4. **Fase 1**: ejecuta en paralelo `compute_and_save_cost_surface` por cada raíz MCP (origen en los modos de una capa; sitio o fuente según `INVERT_DIRECTION` en `cross_layers`). Cada worker construye `MCP_Geometric` sobre la vista del memmap (sin copia), extrae el escalar de coste por destino y guarda el traceback en `phase1_tracebacks/traceback_<id>.npz` (plano y rápido si `KEEP_PHASE1_FILES=False`; comprimido si `True`). Con `RESUME=True` los `.npz` con huella coincidente se reutilizan y solo se computan los pendientes. Si algún worker falla, se listan los IDs y **se detiene antes de escribir el GPKG**; los destinos con coste infinito se informan sin bloquear.
+5. **Fase 2**: reconstrucción en paralelo (`reconstruct_routes_from_disk` y su variante invertida) con Numba `@njit`; los resultados se consumen como generador desordenado y cada lote se escribe directo al GPKG temporal — la memoria nunca sostiene todas las rutas.
+6. **Paso 5 — Escritura final atómica**: en los modos legacy (`all_pairs`, `single_origin`, `od_pair`) escribe `red_completa_unificada.gpkg` con `os.replace`; en `cross_layers` escribe **un GPKG por raíz** (`rutas_por_origen/rutas_origen_<raiz>.gpkg`) más una fila en `manifest_rutas_por_origen.csv`, reescrita tras cada raíz para que un corte deje un estado parcial legible. Imprime `MODO: ... | rutas esperadas: N` y compara reales vs esperadas. Elimina `phase1_tracebacks/` si `KEEP_PHASE1_FILES = False`.
+
+### Celda 7 — Visualización y exportación final
+
+Mapa final de la red de rutas con escala y norte, armonizando CRS automáticamente (rutas y puntos al CRS del raster, `plotting_extent` para el basemap). En `cross_layers` recorre el manifiesto y genera **un PNG por raíz** (`mapas_por_origen/mapa_origen_<raiz>.png`) sin dejar figuras abiertas.
+
+### Celda 8 — Puntos densificados sobre rutas
+
+Coloca un punto cada `SPACING_M` metros (default 25) sobre cada ruta por interpolación vectorizada con Shapely 2.0 (`shapely.length` + `np.repeat` + `shapely.line_interpolate_point`; 20–50× más rápido que el bucle Python). Guarda `puntos_rutas_<SPACING_M>m.gpkg` con la columna `route_idx` para trazabilidad. En `cross_layers` guarda **un GPKG por raíz** (`puntos_por_origen/puntos_origen_<raiz>.gpkg`, misma columna `route_idx`).
+
+### Celda 9 — Mapa de calor (KDE estilo QGIS)
+
+Estimación de densidad kernel sobre los puntos densificados: grilla con margen de banda, binning numpy vectorizado (`shapely.get_coordinates` + `np.add.at`, 50–100× más rápido que `rasterize`) y convolución FFT (`scipy.fft`, backend MKL). Parámetros: `HEATMAP_RES_M` (30 m), `HEATMAP_BANDWIDTH_M` (1 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). La lógica vive en `_compute_heatmap`, con tests de regresión (pico, georreferenciación y masa del kernel — cubre los bugs históricos `dbd1595` y `be6161f` de pixel_size y crop FFT). Salidas: GeoTIFF + PNG. En `cross_layers` genera **un GeoTIFF por raíz** sobre **una sola grilla por sesión**, de modo que la FFT del kernel se calcula una vez y se reutiliza; `HEATMAP_ORIGIN_IDS` limita el KDE a un subconjunto de raíces.
+
+**Las Celdas 8 y 9 autodetectan la última sesión de `output/`** cuando `OUTPUT_DIR` no apunta a una sesión válida (la Celda 9 busca `puntos_rutas_<SPACING_M>m.gpkg`), de modo que se pueden re-ejecutar solas para retomar resultados ya calculados.
 
 ## Formato de salida
 
@@ -59,20 +177,18 @@ Cada ruta calculada se almacena como un registro con los siguientes atributos:
 | Campo        | Tipo    | Descripción                                              |
 |--------------|---------|----------------------------------------------------------|
 | `geometry`   | LineString | Geometría de la ruta en el CRS del proyecto           |
-| `origin_id`  | entero  | ID del origen (en `all_pairs`, el menor del par; en `single_origin`, siempre `ORIGIN_ID`) | 
+| `origin_id`  | entero  | ID del origen (en `all_pairs`, el menor del par; en `single_origin`, siempre `ORIGIN_ID`) |
 | `dest_id`    | entero  | ID del destino (en `all_pairs`, el mayor del par)        |
 | `cost_total` | real    | Coste acumulado MCP en el píxel de destino               |
 | `length_m`   | real    | Longitud de la ruta en metros (CRS proyectado)           |
 | `n_vertices` | entero  | Número de vértices del camino reconstruido               |
 
-Todos los registros se exportan en un único archivo **`red_completa_unificada.gpkg`** dentro de la carpeta de sesión — con la capa `rutas_unificadas` y, cuando hay destinos con coste infinito, la capa **`destinos_inalcanzables`** (`origin_id`, `dest_id`, `cost_total=inf`; se reescribe en cada corrida para no dejar filas viejas). El `.gpkg.tmp` que aparece durante la escritura incremental es transitorio: se renombra al final o se elimina si la corrida falla.
+En `cross_layers` cada GPKG añade además `origin_layer` y `dest_layer` (los nombres de las capas, que nunca se fusionan). `cost_total` es el coste acumulado mínimo del par según el modelo de coste — no una distancia: dos rutas con la misma `length_m` pueden costar muy distinto si cruzan píxeles caros.
 
-En `ANALYSIS_MODE = "cross_layers"` **no hay archivo unificado**: cada raíz MCP escribe su propio GeoPackage con las columnas `origin_id`, `dest_id`, `origin_layer`, `dest_layer`, `cost_total`, `length_m`, `n_vertices` y `geometry` (ver «Modo cross_layers»). Los modos `all_pairs` y `single_origin` siguen escribiendo `red_completa_unificada.gpkg` sin cambios.
+**Salidas unificadas (modos legacy)**: `output/session_<timestamp>_Refactored/` contiene `red_completa_unificada.gpkg` con la capa `rutas_unificadas` — que se escribe **siempre**, vacía si no hay rutas — y, cuando hay destinos con coste infinito, la capa **`destinos_inalcanzables`** (`origin_id`, `dest_id`, `cost_total=inf`; se reescribe en cada corrida para no dejar filas viejas). El `.gpkg.tmp` que aparece durante la escritura incremental es transitorio: se renombra al final o se elimina si la corrida falla.
 
-La carpeta de sesión tiene la siguiente estructura:
-
-```
-output/session_<timestamp>_Refactored/
+```text
+output/session_<timestamp>_Refactored/          # modos legacy
 ├── _raster_shared.dat          # memmap temporal del raster; se elimina al finalizar
 ├── phase1_tracebacks/          # tracebacks .npz por origen (se elimina si KEEP_PHASE1_FILES=False)
 │   ├── traceback_<id>.npz
@@ -83,87 +199,25 @@ output/session_<timestamp>_Refactored/
 └── heatmap_30m_1km_quartic.png # mapa de calor PNG (Celda 9)
 ```
 
-## Método de trabajo
+**Salidas por raíz (`cross_layers`)**: no hay archivo unificado — una raíz MCP (el **sitio** en dirección directa, la **fuente** si se invirtió) escribe su propio juego de artefactos, más el manifiesto:
 
-El flujo implementado en `LCP_MCP_Geometric.ipynb` sigue estos pasos:
+```text
+output/session_<timestamp>_Refactored/          # modo cross_layers
+├── _raster_shared.dat                      # memmap temporal; se elimina al finalizar
+├── phase1_tracebacks/                      # un .npz por raíz MCP
+│   └── traceback_<raiz>.npz
+├── rutas_por_origen/
+│   └── rutas_origen_<raiz>.gpkg            # layer 'rutas_origen_<raiz>'
+├── mapas_por_origen/
+│   └── mapa_origen_<raiz>.png              # Celda 7
+├── puntos_por_origen/
+│   └── puntos_origen_<raiz>.gpkg           # Celda 8, layer 'puntos_origen_<raiz>'
+├── heatmaps_por_origen/
+│   └── heatmap_origen_<raiz>_30m_1km_quartic.tif   # Celda 9
+└── manifest_rutas_por_origen.csv           # una fila por raíz
+```
 
-### Celda 1 — Importaciones
-Carga de librerías: `numpy`, `rasterio`, `fiona`, `geopandas`, `scikit-image`, `numba`, y los módulos del paquete `lcp`. (La barra de progreso con `tqdm.auto` se importa en la Celda 6.)
-
-### Celda 2 — Definición de funciones
-Define `_calculate_n_jobs_for_phase` (auto-detección de workers por fase según RAM disponible) y `warm_up_numba` (primer llamado a la función Numba JIT para compilarla antes del bucle principal).
-
-### Celda 3 — Configuración central
-Parámetros editables por el usuario:
-
-| Parámetro              | Descripción                                                                  |
-|------------------------|------------------------------------------------------------------------------|
-| `COST_RASTER_PATH`     | Ruta al ráster de coste/fricción (`.tif`)                                   |
-| `ALL_POINTS_SHAPEFILE` | Shapefile o GeoPackage con todos los puntos de la red                        |
-| `MASK_SHAPEFILE_PATH`  | Polígono de restricción espacial (`None` para desactivar)                   |
-| `ID_FIELD_NAME`        | Nombre del campo ID en la capa de puntos                                     |
-| `ANALYSIS_MODE`        | `"all_pairs"` (default, N×N), `"single_origin"` (un origen → todos los demás), `"cross_layers"` (capa de orígenes → capa de destinos, M×N) o `"od_pair"` (una única ruta origen → destino) |
-| `ORIGIN_ID`            | ID del punto origen; requerido y validado en modo `single_origin`            |
-| `ORIGIN_SELECT_FIELD`, `ORIGIN_SELECT_VALUE`, `DEST_SELECT_FIELD`, `DEST_SELECT_VALUE` | Solo en `od_pair`: campo y valor (número o texto) que identifican el punto de inicio y el de destino dentro de la misma capa; `None` = preview de candidatos y detención |
-| `ORIGIN_POINTS_PATH`, `DEST_POINTS_PATH`, `ORIGIN_ID_FIELD`, `DEST_ID_FIELD`, `INVERT_DIRECTION` | Solo en `cross_layers`: capa de sitios, capa de fuentes, campo id de cada capa y política de inversión de dirección (ver «Modo cross_layers») |
-| `HEATMAP_ORIGIN_IDS`   | Solo en `cross_layers`: `None` = un KDE por cada raíz; lista de ids = solo esas raíces |
-| `OUTPUT_DIR`           | Carpeta de salida (generada automáticamente con marca de tiempo)             |
-| `VERBOSE`              | `True` imprime detalles por ruta; `False` suprime el ruido                  |
-| `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
-| `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
-| `MAX_WORKERS_PHASE1`   | `None` = automático. La Celda 2 detecta el hardware (RAM disponible, núcleos físicos/lógicos, disco) y **sugiere** los workers con el modelo de memoria medido; un entero actúa como tope y, si excede lo que permite la RAM, se avisa y se recorta |
-| `KERNEL`               | `"mcp_geometric"` (default, todos los modos) o `"corridor_astar"` (solo `od_pair`): algoritmo de cálculo de la ruta (ver «Kernel de cálculo: mcp_geometric y corridor_astar») |
-| `HEURISTIC_WEIGHT`     | Solo con `KERNEL="corridor_astar"`: peso de la heurística euclidiana (`1.0` default). Es admisible solo si todo coste de celda es ≥ 1.0; con costes menores el kernel **avisa en runtime** y la ruta puede ser subóptima bajo su propio modelo; `0` = Dijkstra exacto (más lento, sin dirección al objetivo y siempre admisible) |
-| `EDGE_BUFFER_PX`       | `0` = no excluye nada. `N` excluye las `N` filas/columnas exteriores del ráster: corta el corredor perimetral cuando el modelo de coste es poco fiable en los límites (la máscara del polígono es siempre **estricta**, no configurable) |
-
-### Celda 4 — Verificación de coherencia de datos
-Valida CRS idénticos (ráster/puntos/máscara), solape espacial y que **todos** los puntos caigan en píxeles válidos (fuera de máscara o `nodata` — los IDs problemáticos se listan). En modo `single_origin` comprueba además que el modo sea válido, que haya ≥ 2 puntos y que `ORIGIN_ID` exista. Cualquier problema **detiene la ejecución** con un mensaje concreto antes de calcular nada. En `cross_layers` valida además la política `INVERT_DIRECTION`, el CRS y los píxeles válidos de **ambas** capas, y aborta si un sitio y una fuente caen en el **mismo píxel** (lista los pares `(sitio, fuente)`: una ruta de longitud cero no se puede representar).
-
-### Celda 5 — Visualización diagnóstica
-Genera un mapa del ráster de coste con los puntos superpuestos para verificar visualmente la configuración antes de lanzar el análisis. En modo `single_origin`, resalta el origen con una estrella.
-
-### Celda 6 — Ejecución principal (dos fases paralelas)
-1. Crea la carpeta de sesión y escribe el memmap compartido del raster.
-2. Compila la función Numba JIT con `warm_up_numba()`.
-3. **Fase 1**: ejecuta en paralelo `compute_and_save_cost_surface` por cada origen. Cada worker construye `MCP_Geometric`, extrae costes escalares por destino y guarda el traceback en `phase1_tracebacks/traceback_<id>.npz` (comprimido si `KEEP_PHASE1_FILES=True`; **plano y rápido** si no). Con `RESUME = True`, los `.npz` con huella coincidente se reutilizan y solo se computan los pendientes.
-4. **Fase 2**: ejecuta en paralelo `reconstruct_routes_from_disk` por cada origen. Cada worker carga el traceback desde disco y reconstruye todos los caminos con Numba.
-5. Escribe cada lote directo (generador de joblib sin orden) a `red_completa_unificada.gpkg.tmp` y lo renombra con `os.replace` al final; imprime `MODO: ... | rutas esperadas: N` y compara reales vs esperadas. Elimina `phase1_tracebacks/` si `KEEP_PHASE1_FILES = False`.
-
-**En `cross_layers`** la Fase 2 cambia de forma: el plan de `lcp.planner.build_pair_plan` fija **una raíz MCP por sitio** (o por fuente si la dirección se invierte) y cada raíz escribe su propio `rutas_por_origen/rutas_origen_<raiz>.gpkg` — con `.tmp` + `os.replace` **por archivo** — más una fila en `manifest_rutas_por_origen.csv`, que se reescribe tras cada raíz para que un corte deje un estado parcial legible. El GPKG unificado no se crea en este modo; al final imprime un reporte por raíz con `esperados`, `inalcanzables`, `escritos` y `estado`.
-
-### Celda 7 — Visualización y exportación final
-Carga el GeoPackage desde memoria (o disco si es necesario) y genera un mapa final de la red de rutas calculadas, con escala y norte. Incluye armonización automática de CRS para evitar desplazamientos entre el ráster y las capas vectoriales. En `cross_layers` recorre el manifiesto y genera **un PNG por raíz** (`mapas_por_origen/mapa_origen_<raiz>.png`) y no deja figuras abiertas.
-
-### Celda 8 — Puntos densificados sobre rutas
-Genera puntos cada `SPACING_M` metros (por defecto 25 m) sobre todas las rutas calculadas. Utiliza vectorización con Shapely 2.0 para procesar ~81M puntos en segundos. Guarda `puntos_rutas_25m.gpkg` con columna `route_idx` para trazabilidad. En `cross_layers` guarda **un GPKG por raíz** (`puntos_por_origen/puntos_origen_<raiz>.gpkg`, capa `puntos_origen_<raiz>`, misma columna `route_idx`).
-
-### Celda 9 — Mapa de calor (Kernel Density Estimation)
-Implementa KDE estilo QGIS con kernel Quartic sobre los puntos densificados. Parámetros configurables: `HEATMAP_RES_M` (resolución, 30 m), `HEATMAP_BANDWIDTH_M` (radio, 1 km), `HEATMAP_KERNEL` (quartic/gaussian/triangular/uniform). Usa numpy binning vectorizado + FFT (`scipy.fft`) para procesar 81M puntos en ~20–30 s — la lógica vive en `_compute_heatmap` (con tests de regresión: pico, georreferenciación y masa del kernel). Salidas: GeoTIFF con metadatos + PNG inline. En `cross_layers` genera **un GeoTIFF por raíz** (`heatmaps_por_origen/heatmap_origen_<raiz>_<res>m_<bw>km_<kernel>.tif`) sobre **una sola grilla por sesión** (unión de extensiones + margen de banda), para que la FFT del kernel se calcule una vez y se reutilice; el KDE recorre las raíces en secuencia (1 worker) y `HEATMAP_ORIGIN_IDS` permite limitarlo a un subconjunto de raíces.
-
-**Bugs corregidos en heatmap:**
-1. **Kernel con pixel_size real** (commit `dbd1595`): El kernel se construye con `pixel_size` medio en vez de `HEATMAP_RES_M`. Usar `HEATMAP_RES_M` para el kernel pero `pixel_size` para el binning genera un desplazamiento sistemático que crece de oeste a este.
-2. **FFT crop offset** (commit `be6161f`): La convolución circular via FFT desplaza el resultado. El crop correcto es `heatmap[2*radius_px:2*radius_px+height, 2*radius_px:2*radius_px+width]`. El offset incorrecto hacia que el pico KDE apareciera en `(2R-1, 2R-1)` en vez de `(R-1, R-1)`.
-
-## Dependencias
-
-El proyecto utiliza las siguientes dependencias principales (ver `pyproject.toml`):
-
-- `fiona`
-- `geopandas`
-- `jupyterlab`
-- `ipywidgets`
-- `matplotlib-scalebar`
-- `numba`
-- `numpy`
-- `pandas`
-- `rasterio`
-- `scikit-image`
-- `scipy`
-- `shapely`
-- `tqdm`
-- `joblib`
-- `datashader` (opcional, para heatmaps alternativos)
-- **Herramientas dev** (en `pyproject.toml`): `pytest` (tests), `ruff` (lint/format), `papermill` (ejecución parametrizada sin abrir Jupyter), `nbstripout` (limpieza de outputs al hacer `git add`).
+El **manifiesto** (`manifest_rutas_por_origen.csv`) declara el estado de cada raíz y se reescribe tras cada una: `root_id`, `capa` (`origin`/`dest`), `agrupacion`, `esperados`, `inalcanzables`, `escritos`, `estado` (`ok`/`incompleto`/`sin_rutas`/`error`) y las rutas de `gpkg`, `mapa`, `densificado` y `heatmap`. Una raíz en estado distinto de `ok` no bloquea a las demás: la Celda 6 termina con un reporte por raíz.
 
 ## Instalación desde cero
 
@@ -318,7 +372,7 @@ source .venv/bin/activate
 uv run pytest tests/ -q
 ```
 
-La salida esperada es `96 passed`.
+La salida esperada es `285 passed`.
 
 ```sh
 uv run ruff check .
@@ -395,33 +449,37 @@ Configuración central»).
 ## Uso básico
 
 1. Prepara los archivos de entrada:
-   - Un ráster de coste/fricción (`*.tif`).
-   - Un shapefile o GeoPackage con todos los puntos de la red (`*.shp` / `*.gpkg`). Acepta `Point` y `MultiPoint`: un MultiPoint de k coordenadas se **explota en k nodos** con ids derivados `id*1000+j` (la carga imprime un resumen de la explosión).
-   - **Opcional**: Un shapefile con el polígono de restricción espacial (`*.shp`).
+   - Un ráster de coste/fricción (`*.tif`) en **CRS proyectado** (p. ej. UTM) para que `length_m` sea significativo.
+   - Un shapefile o GeoPackage con los puntos (`*.shp` / `*.gpkg`). Acepta `Point` y `MultiPoint`: un MultiPoint de k coordenadas se **explota en k nodos** con ids derivados `id*1000+j`.
+   - **Opcional**: un polígono de restricción espacial (`*.shp` / `*.gpkg`).
 
 2. Abre `LCP_MCP_Geometric.ipynb` en JupyterLab.
 
-3. Ajusta los parámetros en **Celda 3**:
-   - `COST_RASTER_PATH`: ruta a tu ráster de coste.
-   - `ALL_POINTS_SHAPEFILE`: ruta a tus puntos.
-   - `MASK_SHAPEFILE_PATH`: ruta al polígono de máscara, o `None`.
-   - `ID_FIELD_NAME`: nombre del campo ID en la capa de puntos.
-   - `ANALYSIS_MODE`: modo de análisis — `all_pairs`, `single_origin` (+ `ORIGIN_ID`) o `cross_layers` (+ `ORIGIN_POINTS_PATH`, `DEST_POINTS_PATH`, `INVERT_DIRECTION`); ver «Modos de análisis» y «Modo cross_layers».
+3. Ajusta los parámetros en **Celda 3**: `COST_RASTER_PATH`, `ALL_POINTS_SHAPEFILE`, `MASK_SHAPEFILE_PATH`, `ID_FIELD_NAME` y `ANALYSIS_MODE` (+ los parámetros propios del modo; ver «Modos de análisis»).
 
-4. Ejecuta las celdas de código en orden (1 → 9); cada una está precedida de su celda markdown explicativa en español. Las celdas 8 y 9 son post-procesamiento opcional.
+4. Ejecuta las celdas de código en orden (1 → 9); las celdas 8 y 9 son post-procesamiento opcional.
 
-5. Los resultados se guardan en `output/session_<timestamp>/`:
-   - `red_completa_unificada.gpkg`: rutas calculadas (`all_pairs` / `single_origin`)
-   - `puntos_rutas_25m.gpkg`: puntos densificados (Celda 8)
-   - `heatmap_30m_1km_quartic.tif`: mapa de calor GeoTIFF (Celda 9)
-   - `heatmap_30m_1km_quartic.png`: mapa de calor PNG (Celda 9)
-   - en `cross_layers`: `rutas_por_origen/`, `mapas_por_origen/`, `puntos_por_origen/`, `heatmaps_por_origen/` y `manifest_rutas_por_origen.csv` (un juego de artefactos por raíz MCP)
+5. Los resultados se guardan en `output/session_<timestamp>_Refactored/`:
+   - `red_completa_unificada.gpkg` con las capas `rutas_unificadas` y `destinos_inalcanzables` (`all_pairs` / `single_origin` / `od_pair`).
+   - `puntos_rutas_25m.gpkg` (Celda 8) y `heatmap_30m_1km_quartic.tif` / `.png` (Celda 9).
+   - en `cross_layers`: `rutas_por_origen/`, `mapas_por_origen/`, `puntos_por_origen/`, `heatmaps_por_origen/` y `manifest_rutas_por_origen.csv` (un juego de artefactos por raíz MCP).
 
-**Para retomar resultados ya calculados**: corre solo las celdas 8 y 9 — autodetectan la última sesión de `output/` (buscan `red_completa_unificada.gpkg` y `puntos_rutas_<espaciado>m.gpkg`) cuando `OUTPUT_DIR` no apunta a una sesión válida.
+**Para retomar resultados ya calculados**: corre solo las celdas 8 y 9 — autodetectan la última sesión de `output/` cuando `OUTPUT_DIR` no apunta a una sesión válida.
+
+**Ejecución parametrizada sin abrir el notebook** (la Celda 3 está etiquetada `parameters`):
+
+```sh
+# modo estrella
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
+# dos capas: cada sitio hacia todas las fuentes
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE cross_layers -p ORIGIN_POINTS_PATH "D:\Sitios y fuentes\Sitios.gpkg" -p DEST_POINTS_PATH "D:\Sitios y fuentes\Fuentes.gpkg"
+# una ruta concreta con el kernel alternativo
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 5 -p DEST_SELECT_VALUE 3 -p KERNEL corridor_astar
+```
 
 ## Modos de análisis: all_pairs, single_origin, cross_layers y od_pair
 
-La **Celda 3** (precedida de celdas markdown que explican los cuatro modos **dentro del propio notebook**) permite elegir entre cuatro modos de análisis:
+La **Celda 3** permite elegir entre cuatro modos de análisis:
 
 | | `all_pairs` (default) | `single_origin` (estrella / SSSP) | `cross_layers` (dos capas) | `od_pair` (una ruta) |
 |---|---|---|---|---|
@@ -431,57 +489,18 @@ La **Celda 3** (precedida de celdas markdown que explican los cuatro modos **den
 | MCPs en Fase 1 | N−1 = 13 (uno por origen) | **1** (solo el origen) | **M** (uno por sitio) o **N** (uno por fuente si se invierte) | **1** |
 | Dedup | filtro `did > origin_id` (triángulo superior OD) | `did != ORIGIN_ID` (sin triángulo) | **ninguna**: los ids se repiten entre capas y es legítimo | **ninguna**: el par pedido se calcula tal cual (incluye `origin_id > dest_id`) |
 | Salidas | `red_completa_unificada.gpkg` (+ capa `destinos_inalcanzables`) | el mismo GPKG unificado | un GPKG + un PNG + un densificado + un GeoTIFF **por raíz** y `manifest_rutas_por_origen.csv` | el mismo GPKG unificado con **1 fila** |
-| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto | Origen y destino son **fenómenos distintos** en capas distintas (sitios → fuentes, casos → hospitales) y cada corrida se revisa o se comparte por separado | **Una conexión puntual**: una sola ruta concretas para inspección, ilustración o control de calidad, elegida por atributo (id, nombre, tipo…) sin editar la capa |
+| Cuándo usarlo | Red completa: matrices OD, corredores, densificación (Celda 8), heatmaps (Celda 9) | Un sitio concreto: accesibilidad de un punto aislado, coste de acceso a un rasgo puntual, comparar un origen frente al resto | Origen y destino son **fenómenos distintos** en capas distintas (sitios → fuentes, casos → hospitales) y cada corrida se revisa o comparte por separado | **Una conexión puntual**: una sola ruta para inspección, ilustración o control de calidad, elegida por atributo (id, nombre, tipo…) sin editar la capa |
 | Mapas (C5/C7) | todos los puntos en rojo | origen resaltado con estrella lime | un mapa por raíz (orígenes en cian, destinos en amarillo) | todos los puntos en rojo (la ruta es una sola) |
 
-**Concepto**: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O: en modo estrella no se pierde información para ese origen.
+**Concepto del modo estrella**: equivale a *single-source shortest paths* (SSSP) frente a *all-pairs* (APSP) — el mismo flujo con un parámetro que acota el alcance, al estilo de `source=` en NetworkX. Como `MCP_Geometric` es simétrico, la ruta O→P calculada es idéntica a P→O: en modo estrella no se pierde información para ese origen. Con los datos de ejemplo, Fase 1 baja de ~1,9 s a ~0,2 s (un solo MCP y un worker).
 
-**Selección** — editando la Celda 3 (etiquetada `parameters`) o sin abrir el notebook:
-
-```sh
-# modo estrella
-uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE single_origin -p ORIGIN_ID 7
-# modo completo (equivalente al default)
-uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
-```
-
-**Validación (Celda 4)**: modo desconocido, `single_origin` sin `ORIGIN_ID` o ID inexistente detienen la ejecución listando los valores válidos / IDs disponibles.
-
-**Salida**: el mismo `red_completa_unificada.gpkg` con los mismos campos (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`) — con N−1 filas en modo estrella. La Celda 6 imprime `MODO: ... | rutas esperadas: N` al arrancar y compara reales vs esperadas al final (si difieren: destinos con coste infinito, informados con sus IDs).
-
-**Rendimiento**: el modo estrella ejecuta 1 MCP en vez de N−1 (con los datos de ejemplo, Fase 1 de ~1,9 s a ~0,2 s y un solo worker).
-
-**Casos límite**: `N = 1` en modo estrella genera un task degenerado (fuera del dominio previsto); los destinos inalcanzables no bloquean pero se informan con sus IDs.
-
-### Kernel de cálculo: `mcp_geometric` y `corridor_astar`
-
-Además del modo, la Celda 3 permite elegir **cómo se calcula la ruta** con el parámetro `KERNEL`. Es una **opción de cálculo, no un reemplazo**: el pipeline MCP (`mcp_geometric`) sigue siendo el default y el comportamiento de todas las corridas existentes no cambia salvo que el usuario elija el kernel alternativo.
-
-| | `mcp_geometric` (default) | `corridor_astar` |
-|---|---|---|
-| Algoritmo | Dijkstra exacto con coste geométrico (`skimage.graph.MCP_Geometric`, 8-conectado) | A* jerárquico dirigido al objetivo: Fase 1 en baja resolución (32×/20×/10×) delimita un corredor y Fase 2 busca en alta resolución solo dentro de él; si el corredor no produce ruta, reintenta en toda la máscara |
-| Modos donde está habilitado | **todos** | **solo `od_pair`** (validado en Celda 4; en otros modos aborta con error explicativo) |
-| Modelo de coste | Interpolación geométrica entre celdas (semántica de skimage) | Media de costes de celda × distancia euclidiana entre centros de píxel (modelo de la versión legacy) |
-| Cuándo conviene | Todos los usos habituales; **obligatorio** para `all_pairs`, `single_origin` y `cross_layers` (una corrida MCP por raíz sirve a todos los destinos) | Una **ruta 1→1 en rásters grandes**: Dijkstra expande uniformemente y puede explorar casi toda la superficie para un destino lejano; el A* con corredor es dirigido y acota el área explorada |
-| Salidas | `red_completa_unificada.gpkg` y todo el flujo posterior intacto | **El mismo** GPKG y flujo posterior; solo cambia cómo se calcula la única ruta |
-
-**Selección** (Celda 3, o sin abrir Jupyter):
-
-```sh
-uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 5 -p DEST_SELECT_VALUE 3 -p KERNEL corridor_astar
-```
-
-**Limitaciones de `corridor_astar`**: el modelo de coste difiere del geométrico de skimage, por lo que la ruta y el `cost_total` pueden diferir levemente de los del kernel default para el mismo par; en rásters pequeños la ventaja es nula o inversa (dos fases de overhead); solo está disponible para un par a la vez. Los resultados comparados entre kernels son válidos como **costes independientes por modelo**, no como el mismo modelo con distinto orden de exploración.
-
-**Admisibilidad de la heurística (solo `corridor_astar`)**: el kernel usa una heurística euclidiana ponderada por `HEURISTIC_WEIGHT` (Celda 3, default `1.0`), que es admisible (garantiza la ruta óptima bajo su propio modelo de coste) solo si **todo coste de celda de la superficie es ≥ 1.0**. En superficies con costes por debajo de 1 (p. ej. velocidades de marcha normalizadas) la heurística sobreestima el coste restante y la ruta puede ser subóptima *dentro del propio kernel*: el kernel **detecta esta situación en runtime** (mínimo de coste sobre las celdas transitables, excluyendo nodata) y emite una advertencia. Si la optimalidad importa sobre esa clase de superficies, definiendo `HEURISTIC_WEIGHT = 0` en la Celda 3 (o `-p HEURISTIC_WEIGHT 0` en papermill) la búsqueda se vuelve Dijkstra exacto (más lento, sin dirección al objetivo y siempre admisible).
-
-**Nota sobre paralelización por tiles**: la experimentación con divisiones del ráster en tiles (`LCP-parallel-tile`) queda como **feature futuro**: la implementación resultó compleja y con artefactos en los bordes de tile, y no forma parte de esta versión.
+**Validación (Celda 4)**: modo desconocido, `single_origin` sin `ORIGIN_ID` o ID inexistente detienen la ejecución listando los valores válidos / IDs disponibles. La Celda 6 imprime `MODO: ... | rutas esperadas: N` y compara reales vs esperadas al final (si difieren: destinos con coste infinito, informados con sus IDs).
 
 ### Modo od_pair
 
-Modo de **una sola ruta**: calcula exactamente el par origen→destino pedido dentro de la **misma capa** (`ALL_POINTS_SHAPEFILE`), reutilizando todo el flujo legacy (GPKG unificado, mapa, densificado, KDE). Pensado para cuando la selección previa por `ORIGIN_ID` causaba confusión entre el **id del atributo** y el **fid** del archivo.
+Modo de **una sola ruta**: calcula exactamente el par origen→destino pedido dentro de la **misma capa** (`ALL_POINTS_SHAPEFILE`), reutilizando todo el flujo legacy (GPKG unificado, mapa, densificado, KDE). Pensado para cuando la selección por `ORIGIN_ID` causaba confusión entre el **id del atributo** y el **fid** del archivo.
 
-**Selección por campo y valor (Celda 3)**:
+**Parámetros (Celda 3)**:
 
 | Parámetro | Default | Descripción |
 |---|---|---|
@@ -490,12 +509,12 @@ Modo de **una sola ruta**: calcula exactamente el par origen→destino pedido de
 
 **Reglas del selector (sin fallback silencioso)**:
 
-- Si el **campo no existe** → `ValueError` con los **campos disponibles** de la capa. Para usar el fid hay que pedirlo explícitamente (`ORIGIN_SELECT_FIELD = "fid"`); nunca se usa de incognito.
-- Si el **valor no existe** → `ValueError` con los **valores disponibles** de ese campo.
-- Si el valor corresponde a **varios puntos** → `ValueError` pidiendo refinar el criterio (la selección debe ser única).
-- Si el **origen y el destino caen en el mismo punto** → `ValueError` con la selección resuelta.
-- Con los valores en **`None`** → la Celda 4 imprime la **tabla de candidatos** (`id`, `fid`, coordenadas, píxel) y **detiene** la ejecución; nunca elige automáticamente.
-- Con valores válidos → **eco** de la selección resuelta: id elegido, fid real del feature, campo/valor usado y píxel del raster.
+- **Campo inexistente** → `ValueError` con los **campos disponibles** de la capa. Para usar el fid hay que pedirlo explícitamente (`ORIGIN_SELECT_FIELD = "fid"`); nunca se usa de incógnito.
+- **Valor inexistente** → `ValueError` con los **valores disponibles** de ese campo.
+- **Valor ambiguo** (varios puntos) → `ValueError` pidiendo refinar el criterio.
+- **Origen = destino** (mismo punto) → `ValueError` con la selección resuelta.
+- **Valores en `None`** → la Celda 4 imprime la **tabla de candidatos** (`id`, `fid`, coordenadas, píxel) y **detiene**; nunca elige automáticamente.
+- **Valores válidos** → **eco** de la selección resuelta: id elegido, fid real del feature, campo/valor usado y píxel del raster.
 
 ```sh
 uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 7 -p DEST_SELECT_VALUE 3
@@ -503,46 +522,21 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p O
 uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_FIELD nombre -p ORIGIN_SELECT_VALUE "Sitio A" -p DEST_SELECT_FIELD fid -p DEST_SELECT_VALUE 5
 ```
 
-**Salida**: el mismo `red_completa_unificada.gpkg` con **1 fila** (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`) — sin dedup: si `origin_id > dest_id` el par se calcula igual. La Celda 6 imprime `MODO: od_pair (origen X -> destino Y) | rutas esperadas: 1`.
-
-**Casos límite (nunca silenciosos)**: si el origen y el destino caen en el **mismo píxel** (ids distintos, misma celda del raster — la validación de mismo píxel de la Celda 4 solo aplica a `cross_layers`) o el destino es **inalcanzable** (p. ej. tras una barrera de nodata, con cualquier kernel), no se escribe ninguna ruta: el par queda registrado en la capa `destinos_inalcanzables` y la capa `rutas_unificadas` se escribe **siempre** (vacía si no hay rutas), de modo que el GPKG conserva el esquema completo en cualquier corrida.
+**Casos límite (nunca silenciosos)**: si el origen y el destino caen en el **mismo píxel** (ids distintos, misma celda) o el destino es **inalcanzable** (p. ej. tras una barrera de nodata, con cualquier kernel), no se escribe ninguna ruta: el par queda registrado en la capa `destinos_inalcanzables` y la capa `rutas_unificadas` se escribe **siempre** (vacía si no hay rutas), de modo que el GPKG conserva el esquema completo en cualquier corrida.
 
 ### Modo cross_layers
 
-Modo de **dos capas**: las rutas van de **cada** punto de una capa de orígenes (los sitios) hacia **todos** los puntos de una capa de destinos (las fuentes). A diferencia de los modos de una sola capa, las dos capas se cargan en **diccionarios separados y nunca se fusionan**: los ids se repiten entre capas y eso es legítimo (el sitio `1` y la fuente `1` son puntos distintos, con coordenadas distintas).
+Modo de **dos capas**: las rutas van de **cada** punto de una capa de orígenes (los sitios) hacia **todos** los puntos de una capa de destinos (las fuentes). Las dos capas se cargan en **diccionarios separados y nunca se fusionan**: los ids se repiten entre capas y eso es legítimo (el sitio `1` y la fuente `1` son puntos distintos). Semántica **M×N**: todos los sitios contra todas las fuentes, sin deduplicación por id y sin pares dentro de una misma capa (3 sitios × 2 fuentes = 6 rutas).
 
-**Concepto**: **M×N pares** — todos los sitios contra todas las fuentes, sin deduplicación por id y sin pares dentro de una misma capa. Con 3 sitios y 2 fuentes se calculan 6 rutas, y cada corrida MCP (una por **raíz**) produce su propio juego de artefactos.
-
-**Parámetros nuevos (Celda 3)**:
+**Parámetros propios (Celda 3)**:
 
 | Parámetro | Default | Descripción |
 |---|---|---|
-| `ANALYSIS_MODE` | `"all_pairs"` | Poner `"cross_layers"` para activar el modo. En este modo `ALL_POINTS_SHAPEFILE`, `ID_FIELD_NAME` y `ORIGIN_ID` no se usan |
-| `ORIGIN_POINTS_PATH` | `None` | Capa de orígenes / sitios (obligatoria en este modo) |
-| `DEST_POINTS_PATH` | `None` | Capa de destinos / fuentes (obligatoria en este modo) |
-| `ORIGIN_ID_FIELD` | `"id"` | Campo identificador de la capa de orígenes |
-| `DEST_ID_FIELD` | `"id"` | Campo identificador de la capa de destinos |
-| `INVERT_DIRECTION` | `"auto"` | Política de inversión: `"auto"`, `"never"` o `"always"` |
+| `ORIGIN_POINTS_PATH` | `None` | Capa de orígenes / sitios (obligatoria) |
+| `DEST_POINTS_PATH` | `None` | Capa de destinos / fuentes (obligatoria) |
+| `ORIGIN_ID_FIELD` / `DEST_ID_FIELD` | `"id"` | Campo identificador de cada capa |
+| `INVERT_DIRECTION` | `"auto"` | Política de inversión de dirección |
 | `HEATMAP_ORIGIN_IDS` | `None` | `None` = KDE de todas las raíces; lista de ids = solo esas raíces |
-
-**Ejemplo de configuración con las dos capas** (Celda 3):
-
-```python
-ANALYSIS_MODE = "cross_layers"
-
-ORIGIN_POINTS_PATH = r"D:\Sitios y fuentes\Sitios.gpkg"  # capa de sitios
-DEST_POINTS_PATH = r"D:\Sitios y fuentes\Fuentes.gpkg"  # capa de fuentes
-ORIGIN_ID_FIELD = "id"
-DEST_ID_FIELD = "id"
-INVERT_DIRECTION = "auto"
-
-# El resto de la configuracion (raster de coste, mascara, EDGE_BUFFER_PX,
-# KEEP_PHASE1_FILES, RESUME) se mantiene igual que en los otros modos.
-COST_RASTER_PATH = os.path.join(DATA_DIR, "cost.tif")
-MASK_SHAPEFILE_PATH = os.path.join(DATA_DIR, "area-mask.shp")
-```
-
-**Ejecución sin abrir el notebook**:
 
 ```sh
 uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE cross_layers -p ORIGIN_POINTS_PATH "D:\Sitios y fuentes\Sitios.gpkg" -p DEST_POINTS_PATH "D:\Sitios y fuentes\Fuentes.gpkg"
@@ -556,120 +550,112 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE cross_layers
 | `"never"` | Nunca invierte: M corridas MCP, una por sitio |
 | `"always"` | Invierte siempre: N corridas MCP, una por fuente |
 
-- **Cuándo conviene**: `MCP_Geometric` explora el área necesaria para alcanzar sus destinos, así que el coste lo manda el área barrida. Si las fuentes son pocas y los sitios muchos, invertir cambia M corridas por N.
+- **Cuándo conviene**: el coste lo manda el área explorada. Si las fuentes son pocas y los sitios muchos, invertir cambia M corridas por N.
 - **Las rutas se registran igual**: `origin_id` = sitio y `dest_id` = fuente en ambas direcciones (la polilínea se invierte si la corrida partió de la fuente).
-- **El coste acumulado es idéntico**: el MCP es simétrico, así que `cost_total` del par sitio-fuente no cambia al invertir (medido: 34.1421 en ambas direcciones).
-- **La geometría puede diferir levemente**: con empates de coste el traceback elige una de las rutas óptimas, de modo que `n_vertices` y `length_m` pueden cambiar (medido: mismo número de vértices, trazado no bit-idéntico). La diferencia es de trazado, no de optimalidad.
+- **El coste acumulado es idéntico** (simetría del MCP); **la geometría puede diferir levemente** por empates de coste: diferencia de trazado, no de optimalidad.
+- El plan de pares por raíz lo fija `lcp.planner.build_pair_plan`; los `dest_pixels` de cada task salen siempre de la capa del **target** del plan. La huella de `RESUME` incluye ambas capas, la dirección resuelta y la identidad de la máscara.
 
-**Layout de salidas** — una raíz MCP = un juego de artefactos (nunca unificados):
+El layout de salidas por raíz y el manifiesto están descritos en «Formato de salida». Para un **heatmap global** a partir de los densificados por raíz, concatena los `puntos_origen_*.gpkg` en el archivo que espera el camino legacy (`puntos_rutas_<SPACING_M>m.gpkg`) y vuelve a ejecutar la Celda 9 con `ANALYSIS_MODE` distinto de `"cross_layers"`; la columna `route_idx` identifica la ruta dentro de su GPKG de origen, así que añade una columna con el id de la raíz antes de escribir si necesitas trazabilidad.
 
+**Rendimiento**: el coste lo manda el área explorada y la cantidad de raíces, no la cantidad de destinos (un MCP explora hasta el destino más lejano). Cada GeoPackage arrastra ~96 KB de overhead propio, así que M raíces implican M archivos. La grilla única por sesión permite calcular la FFT del kernel una vez; el KDE recorre las raíces en secuencia (1 worker).
+
+## Kernel de cálculo: mcp_geometric y corridor_astar
+
+Además del modo, la Celda 3 permite elegir **cómo se calcula la ruta** con el parámetro `KERNEL`. Es una **opción de cálculo, no un reemplazo**: `mcp_geometric` sigue siendo el default y el comportamiento de todas las corridas existentes no cambia salvo que se elija el kernel alternativo.
+
+| | `mcp_geometric` (default) | `corridor_astar` |
+|---|---|---|
+| Algoritmo | Dijkstra exacto con coste geométrico (`skimage.graph.MCP_Geometric`, 8-conectado) | A* jerárquico dirigido al objetivo: Fase 1 en baja resolución delimita un corredor y Fase 2 busca en alta resolución solo dentro de él; sin ruta en el corredor, Plan B en toda la máscara |
+| Modos donde está habilitado | **todos** | **solo `od_pair`** (`check_kernel` en Celda 4; en otros modos aborta con error explicativo) |
+| Modelo de coste | Interpolación geométrica entre celdas (semántica de skimage) | Media de costes de celda × distancia euclidiana entre centros de píxel |
+| Cuándo conviene | Todos los usos habituales; **obligatorio** para `all_pairs`, `single_origin` y `cross_layers` (una corrida MCP sirve a todos los destinos) | Una **ruta 1→1 en rásters grandes**: Dijkstra expande uniformemente y puede explorar casi toda la superficie para un destino lejano; el A* con corredor es dirigido y acota el área explorada |
+| Salidas | `red_completa_unificada.gpkg` y todo el flujo posterior intacto | **El mismo** GPKG y flujo posterior; solo cambia cómo se calcula la única ruta |
+
+```mermaid
+flowchart TD
+    A["Par od_pair resuelto por campo y valor<br/>raster + mascara ya validados en la Celda 4"]
+    B["Fase 1 LR<br/>A* sobre la grilla reducida<br/>escalera de factores de downsampling: 32 - 20 - 10<br/>de mas gruesa a mas fina, primer exito gana"]
+    C{"Ruta LR encontrada<br/>con el factor actual?"}
+    D["Corredor de Fase 2<br/>buffer de corridor_buffer_pixels, 150 px por defecto<br/>alrededor de la ruta LR<br/>intersectado con la mascara de estudio"]
+    E["Fase 2 HR<br/>A* en alta resolucion solo dentro del corredor"]
+    F{"Ruta HR<br/>en el corredor?"}
+    G["Plan B<br/>A* en toda la mascara de estudio"]
+    H["Resultado: path_pixels + cost_total<br/>modelo: media de costes de celda x distancia euclidiana<br/>sin ruta alcanzable: path None y cost inf<br/>el par queda en destinos_inalcanzables"]
+    A --> B --> C
+    C -- "no: refina con el siguiente factor" --> B
+    C -- "si" --> D --> E --> F
+    F -- "no" --> G --> H
+    F -- "si" --> H
 ```
-output/session_<timestamp>_Refactored/
-├── _raster_shared.dat                      # memmap temporal; se elimina al finalizar
-├── phase1_tracebacks/                      # un .npz por raíz MCP
-│   └── traceback_<raiz>.npz
-├── rutas_por_origen/
-│   └── rutas_origen_<raiz>.gpkg            # layer 'rutas_origen_<raiz>'
-├── mapas_por_origen/
-│   └── mapa_origen_<raiz>.png              # Celda 7
-├── puntos_por_origen/
-│   └── puntos_origen_<raiz>.gpkg           # Celda 8, layer 'puntos_origen_<raiz>'
-├── heatmaps_por_origen/
-│   └── heatmap_origen_<raiz>_30m_1km_quartic.tif   # Celda 9
-└── manifest_rutas_por_origen.csv           # una fila por raíz
+
+**Limitaciones de `corridor_astar`**: el modelo de coste difiere del geométrico de skimage, por lo que la ruta y el `cost_total` pueden diferir levemente de los del kernel default para el mismo par; en rásters pequeños la ventaja es nula o inversa (dos fases de overhead); solo está disponible para un par a la vez. Los resultados comparados entre kernels son válidos como **costes independientes por modelo**, no como el mismo modelo con distinto orden de exploración.
+
+**Admisibilidad de la heurística (solo `corridor_astar`)**: el kernel usa una heurística euclidiana ponderada por `HEURISTIC_WEIGHT` (default `1.0`). La condición de admisibilidad es **weight-relativa**: la heurística es admisible (garantiza la ruta óptima bajo el propio modelo del kernel) solo si `HEURISTIC_WEIGHT ≤` el **mínimo de coste transitable** de la superficie — con weight > 1.0 y costes en `[1.0, weight)` la heurística también sobreestima, y con `0 < weight < min_coste` el aviso es innecesario. El kernel lo **detecta en runtime** (mínimo de coste sobre las celdas transitables, excluyendo nodata) y emite una advertencia sugiriendo bajar el weight. Con `HEURISTIC_WEIGHT = 0` la búsqueda es Dijkstra exacto (más lento, sin dirección al objetivo y siempre admisible). Un weight no finito (NaN/inf) o negativo levanta `ValueError`.
+
+```sh
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 5 -p DEST_SELECT_VALUE 3 -p KERNEL corridor_astar
+# con Dijkstra exacto dentro del kernel
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p KERNEL corridor_astar -p HEURISTIC_WEIGHT 0
 ```
 
-`<raiz>` es el id de la raíz MCP de esa corrida: el **sitio** si la dirección es directa, la **fuente** si se invirtió. No se escribe `red_completa_unificada.gpkg`: en este modo no hay red unificada.
+**Nota sobre paralelización por tiles**: la experimentación con divisiones del ráster en tiles queda como **feature futuro**: la implementación resultó compleja y con artefactos en los bordes de tile, y no forma parte de esta versión.
 
-**Columnas de cada GPKG de rutas**:
+## Tests
 
-| Columna | Significado |
+La suite de pytest vive en `tests/` (285 tests) y se ejecuta desde la raíz del repositorio:
+
+```sh
+uv run pytest tests/ -q
+# un solo archivo
+uv run pytest tests/test_pathfinder.py -v
+```
+
+| Archivo | Cobertura |
 |---|---|
-| `origin_id` | Id del sitio (extremo de origen de la ruta) |
-| `dest_id` | Id de la fuente (extremo de destino) |
-| `origin_layer` | Nombre de la capa del origen (las capas nunca se fusionan) |
-| `dest_layer` | Nombre de la capa del destino |
-| `length_m` | **Distancia de la ruta** entregada, en unidades del CRS (metros si el CRS es proyectado) |
-| `cost_total` | **Coste acumulado mínimo** del par según el modelo de coste: la suma de costes de píxel del camino óptimo, no una distancia |
-| `n_vertices` | Número de vértices de la polilínea |
+| `test_utils.py` | `build_route_record` (válido / `None` / ruta corta) |
+| `test_processing.py` | `world_to_pixel` y `create_mask_from_vector` (máscara estricta, CRS mismatch, reparación de geometrías, marco de borde) |
+| `test_data_loader.py` | `load_points_as_dict` (puntos de ejemplo, errores, IDs duplicados) y el selector estricto de `od_pair` |
+| `test_pathfinder.py` | `reconstruct_path_from_traceback` + canary de `DEFAULT_OFFSETS` vs skimage |
+| `test_pathfinder_corruption.py` | tracebacks corruptos devuelven `None` (en subproceso, para no tumbar la suite) |
+| `test_corridor_astar.py` | kernel `corridor_astar`: grilla LR, corredor, A* (heap, barrera, Plan B) y admisibilidad weight-relativa de la heurística |
+| `test_integration.py` | roundtrip Fase 1 → Fase 2 sobre un ráster sintético |
+| `test_planner.py` | `build_pair_plan` por modo, políticas de inversión y `identical_pixel_pairs` |
+| `test_od_pair.py` | plan `od_pair` y selector estricto (`load_point_candidates`/`select_point`) |
+| `test_star_origin_mode.py`, `test_od_pair_notebook.py`, `test_cross_layers_notebook.py` | pins estructurales de los modos en el notebook + corridas end-to-end |
+| `test_outputs.py`, `test_cross_layers_outputs_pins.py` | nombres canónicos por raíz, manifiesto y escritura atómica |
+| `test_postprocessing_direction.py` | reconstrucción directa e invertida, descarte de coste no finito |
+| `test_resources.py` | modelo de memoria medido y sugerencia de workers |
+| `test_heatmap.py` | regresión KDE/FFT (pico, georreferenciación, masa del kernel) |
+| `test_multipoint.py` | explosión de MultiPoint en ids derivados |
+| `test_quality_backlog.py`, `test_notebook_hardening.py`, `test_notebook_validation.py`, `test_scale_large_n.py`, `test_border_corridor.py`, `test_mask_all_touched_effect.py`, `test_cross_layers_verifier.py` | hardening del notebook, validación de la Celda 4, estimación de workers, escala y máscara estricta |
+| `test_requirements_export.py` | `requirements.txt` fiel a `uv.lock` |
 
-`length_m` y `cost_total` miden cosas distintas y no son intercambiables: dos rutas con la misma distancia pueden tener costes muy distintos si cruzan píxeles caros.
+Las funciones Numba (`@njit`) se testean con arrays `numpy` reales; la primera llamada incurre en compilación JIT (~2–5 s): es normal.
 
-**El manifiesto** (`manifest_rutas_por_origen.csv`) declara el estado de cada raíz y se reescribe tras cada una para que una interrupción deje un estado parcial legible:
+**Lint y formato**: `uv run ruff check .` y `uv run ruff format --check .` (configuración fijada en `pyproject.toml`).
 
-| Columna | Significado |
-|---|---|
-| `root_id` | Id de la raíz MCP |
-| `capa` | Capa de la raíz: `origin` (directo) o `dest` (invertido) |
-| `agrupacion` | Agrupación de los artefactos (`root`) |
-| `esperados` | Pares planificados para esa raíz |
-| `inalcanzables` | Pares con coste infinito |
-| `escritos` | Rutas realmente escritas en el GPKG de la raíz |
-| `estado` | `ok`, `incompleto`, `sin_rutas` o `error` |
-| `gpkg`, `mapa`, `densificado`, `heatmap` | Rutas de los artefactos; las tres últimas se completan al correr las Celdas 7, 8 y 9 |
+**Ejecución no interactiva**: `uv run python run_notebook.py` (nbconvert, timeout 30 min/celda) o `uv run papermill` con `-p` para parámetros.
 
-Una raíz en estado distinto de `ok` no bloquea a las demás: la Celda 6 termina con un reporte por raíz que lista las que no quedaron completas.
-
-**Heatmap global a partir de los densificados por raíz** (opcional): la Celda 9 de este modo produce un KDE **por raíz**. Si quieres un único heatmap de toda la red, concatena los `puntos_origen_*.gpkg` en el archivo que espera el camino legacy (`puntos_rutas_<SPACING_M>m.gpkg`) y vuelve a ejecutar la Celda 9 con `ANALYSIS_MODE` distinto de `"cross_layers"` (por ejemplo `"all_pairs"`), que usa una sola grilla para todos los puntos:
-
-```python
-import glob
-import os
-
-import geopandas as gpd
-import pandas as pd
-
-partes = [
-    gpd.read_file(p)
-    for p in sorted(
-        glob.glob(os.path.join(OUTPUT_DIR, "puntos_por_origen", "puntos_origen_*.gpkg"))
-    )
-]
-global_gdf = gpd.GeoDataFrame(pd.concat(partes, ignore_index=True), crs=partes[0].crs)
-global_gdf.to_file(
-    os.path.join(OUTPUT_DIR, "puntos_rutas_25m.gpkg"),
-    layer="puntos_rutas_25m",
-    driver="GPKG",
-)
-```
-
-La columna `route_idx` se reinicia en cada raíz, así que en ese archivo concatenado identifica la ruta **dentro de su GPKG de origen**: si necesitas trazabilidad por raíz, añade una columna con el id de la raíz antes de escribir (p. ej. `global_gdf["root_id"] = ...`).
-
-**Rendimiento**:
-
-- **Una pasada de MCP por raíz**: M corridas en dirección directa, N si se invierte (más la Fase 2 correspondiente).
-- **El coste lo manda el área explorada y la cantidad de raíces, no la cantidad de destinos**: un MCP explora hasta el destino más lejano. Medido, un solo destino cercano supuso 363 celdas y ~1 ms, mientras que 180 destinos exploraron ~360 000 celdas y tardaron ~110 ms.
-- **GPKG por archivo**: cada GeoPackage arrastra ~96 KB de overhead propio (metadatos/esquema de SQLite), así que M raíces implican M archivos — frente a uno solo en los modos legacy.
-- **KDE**: una sola grilla por sesión permite calcular la FFT del kernel una vez; el bucle por raíz reutiliza esa FFT y corre secuencial (1 worker), de modo el tiempo total crece con el número de raíces.
+**Dependencias principales** (ver `pyproject.toml`): `fiona`, `geopandas`, `jupyterlab`, `ipywidgets`, `matplotlib-scalebar`, `numba`, `numpy`, `pandas`, `psutil`, `rasterio`, `scikit-image`, `scipy`, `shapely`, `tqdm`, `joblib` y `datashader` (opcional, para heatmaps alternativos). Herramientas dev: `pytest`, `ruff`, `papermill`, `nbstripout`.
 
 ## Notas técnicas
 
-- El número de rutas calculadas para N puntos es N×(N-1)/2 gracias a la deduplicación. Para N=169 puntos: 14 196 rutas.
+- El número de rutas calculadas para N puntos es N×(N-1)/2 gracias a la deduplicación por simetría. Para N=169 puntos: 14 196 rutas.
 - `MCP_Geometric` emplea un modelo de coste simétrico: el coste de A→B es idéntico al de B→A, por lo que almacenar ambas direcciones sería redundante.
-- La función `reconstruct_path_from_traceback` se compila con `@njit` de Numba la primera vez que se ejecuta. `warm_up_numba()` fuerza esta compilación antes del bucle principal para que no penalice el primer origen real.
 - El buffer del path en Numba está acotado a `traceback.shape[0] + traceback.shape[1]` (filas + columnas del raster). Usar `traceback.size` como tope generaría arrays de ~1.2 GB por llamada, agotando la RAM de los workers silenciosamente.
-- En Fase 1 solo se guarda el traceback (int16, 2 B/celda; comprimido solo si `KEEP_PHASE1_FILES=True` — si no, plano y rápido). El array de costes completo (float64, ~1.27 GB/origen) no se persiste; solo se extrae el escalar de coste por destino.
-- La variable `save_path_to_shapefile` en `utils.py` se mantiene por compatibilidad con código anterior; el flujo principal utiliza `build_route_record`.
-- El ráster de coste debe estar en un CRS proyectado (p. ej. UTM) para que `length_m` sea significativo.
-- **Celda 8 (optimización)**: Usa `shapely.length` + `np.repeat` + `shapely.line_interpolate_point` vectorizado. Speedup: 20–50× sobre bucle Python (~3 min → ~5–10 s).
-- **Celda 9 (optimización)**: Reemplaza `rasterio.features.rasterize` por `shapely.get_coordinates` + `np.add.at` binning vectorizado, y `np.fft` por `scipy.fft` (MKL backend). Speedup: 50–100× sobre rasterize (~20 min → ~10–20 s).
-- **Tests**: `uv run pytest tests/` — suite en `tests/` (unitarias de `lcp/` + roundtrip Fase 1 → Fase 2).
+- Todo acceso al traceback está acotado (extremos, código de offset y celda destino validados): un traceback corrupto devuelve `None` en vez de provocar una violación de acceso.
+- En Fase 1 solo se guarda el traceback (int16, 2 B/celda; comprimido solo si `KEEP_PHASE1_FILES=True` — si no, plano y rápido, ~29 s de zlib ahorrados por origen). El array de costes completo (float64, ~1.27 GB/origen) no se persiste; solo se extrae el escalar de coste por destino.
+- **Memoria por worker (modelo medido)**: el pico de la Fase 1 no lo domina el ráster sino las estructuras de `MCP_Geometric` (mapa de offsets `(2, H, W)` int64 **contiguo** + costes float64 + traceback int16): **76 B por píxel y worker** + ~30 MB fijos (12,2 GB por worker en el ráster de 171,5 Mpx). La Fase 2 cuesta **2 B por píxel**. `lcp/resources.py` implementa el modelo y la sugerencia; el estimador «ráster × 4,5» subestima ×2 y es la causa del `ArrayMemoryError` en `_offset_edge_map`. Disco de Fase 1: `orígenes × H × W × 2` bytes.
+- **Rendimiento (E/S)**: el worker entrega la **vista del memmap** a `MCP_Geometric` sin copiar el ráster (+~20–25 % de workers por la menor RAM); los puntos se escriben con **pyogrio** (2,9× vs el bucle de fiona). Evaluación completa con benchmarks en `odd/tasks/perf-fast-io.md`.
+- **Huella de `RESUME`**: SHA-256 sobre modo, origen, par od, dirección resuelta, puntos, tamaño/mtime del ráster, identidad de la máscara y `EDGE_BUFFER_PX` — cambiar cualquiera de ellos invalida los tracebacks previos (en `cross_layers` incluye además las rutas y campos de ambas capas).
+- El ráster de coste debe estar en un **CRS proyectado** (p. ej. UTM) para que `length_m` sea significativo; el CRS del vector de puntos y el del raster deben coincidir (no hay reproyección automática).
+- La máscara del área de estudio es **siempre estricta** (solo píxeles cuyo centro cae dentro del polígono); `create_mask_from_vector(..., all_touched=True)` queda solo para diagnóstico y pruebas. `EDGE_BUFFER_PX = N` excluye las N filas/columnas exteriores del ráster.
+- La variable `save_path_to_shapefile` en `utils.py` se mantiene por compatibilidad; el flujo principal utiliza `build_route_record` + GeoDataFrame (no escribas shapefiles en código nuevo).
+- **CRS en visualización**: la Celda 6 captura `raster_crs` y lo usa para el GeoPackage; la Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
+- **Escalabilidad (N grande)**: la Fase 2 y el densificado de la Celda 8 se escriben de forma **incremental** — la memoria solo sostiene un lote/origen o un chunk, nunca todos los registros. El orden de filas de los GPKG es el orden de finalización; `route_idx` da la trazabilidad por ruta. *Límite conocido*: la Celda 7 (mapa final) materializa todas las rutas para graficar — con N muy grande usa el PNG ya guardado o evita esa celda.
 - **Outputs del notebook**: no se commitean — `nbstripout` (dependencia dev) está instalado como filtro **local** de git (`nbstripout --install`), así un `git add` limpia los outputs automáticamente. La evidencia de cada corrida queda en los `_exec_*.ipynb` (ignorados) o en la salida de `run_notebook.py`.
 - **Robustez**: si un worker de la Fase 1 falla, la ejecución se detiene antes de escribir el GPKG listando los IDs fallidos (nunca una red parcial en silencio); los destinos inalcanzables (coste `inf`) se informan. `load_points_as_dict` lanza `ValueError` con los IDs duplicados.
-- **Capas MultiPoint**: se aceptan en la capa de puntos; cada feature de k > 1 coordenadas genera k nodos con ids derivados `id*1000+j` (j = 1..k, orden del archivo; colisión de ids o geometría no puntual → `ValueError`). Los ids derivados aparecen como `origin_id`/`dest_id` en las salidas.
-- **CRS en visualización**: Celda 6 captura `raster_crs` y lo usa para el GeoPackage. Celda 7 armoniza automáticamente CRS de rutas y puntos al CRS del raster, y usa `ax.imshow` con `plotting_extent` para evitar desplazamientos del basemap.
-- **Datashader**: Instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
-- **Escalabilidad (N grande)**: la Fase 2 y el densificado de la Celda 8 se escriben de forma **incremental** — la memoria solo sostiene un lote/origen o un chunk, nunca todos los registros (antes: todos los `LineString` en RAM + concatenación global de ~1,6 GB a 81M puntos). Ambas fases muestran progreso con `tqdm`. El orden de filas de los GPKG es el orden de finalización; `route_idx` da la trazabilidad por ruta. *Límite conocido*: la Celda 7 (mapa final) materializa todas las rutas para graficar — con N muy grande usa el PNG ya guardado o evita esa celda.
-- **Memoria por worker (modelo medido)**: el pico de la Fase 1 no lo domina el
-  ráster sino las estructuras de `skimage.graph.MCP_Geometric` (mapa de offsets
-  `(2, H, W)` int64 + costes float64 + traceback int16). Medido con `fully_connected=True`:
-  **76 B por píxel y worker** más ~30 MB fijos (12,2 GB por worker en el ráster de
-  171,5 Mpx). La Fase 2 cuesta **2 B por píxel** (solo carga el traceback).
-  `lcp/resources.py` implementa el modelo y la sugerencia; un factor del tipo
-  «ráster × 4,5» subestima ×2 en rásteres grandes y es la causa del
-  `ArrayMemoryError` en `_offset_edge_map`. Disco de Fase 1: `orígenes × H × W × 2`
-  bytes (~19 GB con 60 orígenes en ese ráster).
-- **Rendimiento (E/S)**: con `KEEP_PHASE1_FILES=False` (lo normal) los `.npz` de Fase 1 se guardan **planos** (~29 s de zlib por origen ahorrados en rasters grandes); el worker usa la **vista del memmap** sin copiar el ráster (+~20–25% de workers por la menor RAM); los puntos se escriben con **pyogrio** (2,9× vs el bucle de fiona). La evaluación completa con benchmarks está en `odd/tasks/perf-fast-io.md`.
+- **Datashader**: instalado como alternativa profesional para heatmaps masivos. No se usa en el flujo principal pero está disponible.
 
 ## Licencia y atribución
 
