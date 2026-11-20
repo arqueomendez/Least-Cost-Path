@@ -313,6 +313,13 @@ ID_FIELD_NAME = 'id'
 ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin" | "cross_layers" | "od_pair"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
 KERNEL = "mcp_geometric"   # "mcp_geometric" (default, todos los modos) | "corridor_astar" (solo od_pair)
+# Peso de la heuristica euclidiana del kernel corridor_astar (solo od_pair).
+# La busqueda es admisible (optima bajo el modelo del kernel) mientras
+# weight <= minimo de coste transitable: con costes < 1.0 el default 1.0
+# sobreestima; el kernel avisa en runtime y sugiere bajar HEURISTIC_WEIGHT.
+# 0 = Dijkstra exacto (mas lento, sin direccion al objetivo, siempre
+# admisible). Un valor negativo aborta con ValueError.
+HEURISTIC_WEIGHT = 1.0
 RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
                                 # workers de Fase 1 si topa con ArrayMemoryError en rams compartidas
@@ -1013,11 +1020,12 @@ try:
     # "mcp_geometric" (default): pipeline MCP de siempre, intacto.
     # "corridor_astar" (solo od_pair): A* jerarquico dirigido 1->1; calcula la
     # ruta aqui mismo (una sola busqueda) y escribe el registro en el MISMO
-    # GPKG/flujo de salidas. Con _KERNEL_CORRIDOR no se ejecutan: la escritura
-    # del memmap, la huella de reanudacion, el warm-up de numba y TODOS los
-    # banners de Fase 1/2. Los bloques de Fase 1/2 corren SIN tareas (los
-    # Parallel sobre listas vacias no lanzan workers) y sus banners solo se
-    # emiten en modo MCP: en corridor la Fase 2 no produce trabajo ni salida.
+    # GPKG/flujo de salidas. R2-corridor-gating-scatter (revision): el switch
+    # del kernel vive UNICAMENTE en este if/else; la rama corridor deja
+    # definidas las variables que el Paso 5 consume (n_rutas_escritas,
+    # pares_inf, n_expected, dur_p1, dur_p2) y no ejecuta NINGUNA parte del
+    # pipeline MCP (memmap, huella de reanudacion, warm-up de numba, Fase 1 ni
+    # Fase 2), que queda entera dentro del else sin guards dispersos.
     _KERNEL_CORRIDOR = _IS_OD and KERNEL == "corridor_astar"
     if _KERNEL_CORRIDOR:
         t0_kernel = time.time()
@@ -1029,39 +1037,70 @@ try:
         _dest_pixel = proc.world_to_pixel(
             transform, all_points[OD_DEST_ID][0], all_points[OD_DEST_ID][1]
         )
-        path_px, cost_k = pf.corridor_astar_route(
-            final_cost_raster,
-            _nodata_k,
-            src_res[0],
-            abs(src_res[1]),
-            _origin_pixel,
-            _dest_pixel,
-            main_search_mask,
-        )
-        if path_px is None:
+        pares_inf = []
+        if _origin_pixel == _dest_pixel:
+            # S3/R3-corridor-same-pixel-silent-loss (revision): dos puntos
+            # DISTINTOS pueden caer en el mismo pixel (la Celda 4 solo aborta
+            # por mismo pixel en cross_layers). El A* devolveria una ruta de
+            # un pixel con coste 0 y build_route_record la descartaria en
+            # silencio: no se busca y el par se registra explicitamente en
+            # destinos_inalcanzables (Paso 5).
             print(
-                f"  Sin ruta alcanzable entre {OD_ORIGIN_ID} y {OD_DEST_ID} "
-                "con corridor_astar: no se escribe ruta."
+                f"  ADVERTENCIA: origen y destino caen en el MISMO pixel "
+                f"({_origin_pixel[0]}, {_origin_pixel[1]}): no hay ruta que "
+                f"escribir; el par {OD_ORIGIN_ID} -> {OD_DEST_ID} se registra "
+                "en la capa destinos_inalcanzables."
             )
+            pares_inf = [(OD_ORIGIN_ID, OD_DEST_ID)]
         else:
-            _record = utils.build_route_record(
-                path_px, transform, OD_ORIGIN_ID, OD_DEST_ID, float(cost_k)
+            path_px, cost_k = pf.corridor_astar_route(
+                final_cost_raster,
+                _nodata_k,
+                src_res[0],
+                abs(src_res[1]),
+                _origin_pixel,
+                _dest_pixel,
+                main_search_mask,
+                heuristic_weight=HEURISTIC_WEIGHT,
             )
-            if _record is not None:
-                if os.path.exists(gpkg_tmp_path):
-                    os.remove(gpkg_tmp_path)
-                gpd.GeoDataFrame([_record], crs=raster_crs).to_file(
-                    gpkg_tmp_path, layer="rutas_unificadas", driver="GPKG", mode="w"
-                )
-                n_rutas_escritas = 1
+            if path_px is None:
+                # S4/R3-corridor-unreachable-not-materialized (revision): el
+                # par inalcanzable se materializa en la capa
+                # destinos_inalcanzables en el Paso 5, no queda solo en stdout.
                 print(
-                    f"  Ruta corridor_astar: {len(path_px)} pixeles, "
-                    f"coste acumulado {float(cost_k):.2f}"
+                    f"  Sin ruta alcanzable entre {OD_ORIGIN_ID} y {OD_DEST_ID} "
+                    "con corridor_astar: el par se registra en la capa "
+                    "destinos_inalcanzables."
                 )
+                pares_inf = [(OD_ORIGIN_ID, OD_DEST_ID)]
+            else:
+                _record = utils.build_route_record(
+                    path_px, transform, OD_ORIGIN_ID, OD_DEST_ID, float(cost_k)
+                )
+                if _record is None:
+                    # Ruta degenerada que build_route_record descarta (menos
+                    # de 2 vertices): mismo tratamiento no silencioso.
+                    print(
+                        f"  ADVERTENCIA: la ruta corridor_astar entre "
+                        f"{OD_ORIGIN_ID} y {OD_DEST_ID} es degenerada y no se "
+                        "puede escribir; el par se registra en la capa "
+                        "destinos_inalcanzables."
+                    )
+                    pares_inf = [(OD_ORIGIN_ID, OD_DEST_ID)]
+                else:
+                    if os.path.exists(gpkg_tmp_path):
+                        os.remove(gpkg_tmp_path)
+                    gpd.GeoDataFrame([_record], crs=raster_crs).to_file(
+                        gpkg_tmp_path, layer="rutas_unificadas", driver="GPKG", mode="w"
+                    )
+                    n_rutas_escritas = 1
+                    print(
+                        f"  Ruta corridor_astar: {len(path_px)} pixeles, "
+                        f"coste acumulado {float(cost_k):.2f}"
+                    )
+        n_expected = 1
         dur_p1 = time.time() - t0_kernel
         dur_p2 = 0.0
-
-    if _KERNEL_CORRIDOR:
         print("[Paso 2/5] Omitido: corridor_astar trabaja sobre el raster en memoria.")
     else:
         print("[Paso 2/5] Escribiendo raster en memmap compartido...")
@@ -1071,53 +1110,50 @@ try:
         del mm, final_cost_raster
         print(f"  Memmap escrito en: {memmap_path}")
 
-    shared_data = {
-        "memmap_path":  memmap_path,
-        "raster_dtype": raster_dtype,
-        "raster_shape": raster_shape,
-        "src_transform": transform,
-        # S2 (perf): comprimir los npz solo si persisten (reanudacion con
-        # archivos chicos); temporales -> np.savez plano, ~29 s/origen mas rapido.
-        "compress_npz": KEEP_PHASE1_FILES,
-        # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
-    }
-
-    if not _KERNEL_CORRIDOR:
-        warm_up_numba()
-
-    # --- S2/S1: plan de pares por modo (una raiz MCP por entrada de plan["roots"]) ---
-    if _IS_CROSS:
-        plan = planner.build_pair_plan(
-            "cross_layers", origin_points, dest_points, invert=INVERT_DIRECTION
-        )
-        n_expected = plan["n_expected"]
-        inverted = plan["inverted"]
-        print(
-            f"  Plan cross_layers: {len(origin_points)} origenes x "
-            f"{len(dest_points)} destinos = {n_expected} pares | "
-            f"invertido: {inverted} | raices MCP: {len(plan['roots'])}"
-        )
-    elif ANALYSIS_MODE == "od_pair":
-        # Una sola ruta: la raiz MCP es el origen elegido y el unico target es
-        # el destino elegido. Sin dedup did > origin_id: el par pedido tal cual
-        # (incluye origin_id > dest_id). El task unico se agrega en la cadena
-        # de tasks de abajo; los pixeles comparten el comprehension de abajo.
-        plan = planner.build_pair_plan(
-            "od_pair", all_points, origin_id=OD_ORIGIN_ID, dest_id=OD_DEST_ID
-        )
-        n_expected = plan["n_expected"]
-    # od_pair, all_pairs y single_origin comparten los pixeles de los puntos de
-    # la capa unica (los tres consumen dest_pixels_all abajo): un solo
-    # comprehension para los tres modos (edicion en un solo lugar).
-    if ANALYSIS_MODE != "cross_layers":
-        dest_pixels_all = {
-            pid: proc.world_to_pixel(transform, coords[0], coords[1])
-            for pid, coords in all_points.items()
+        shared_data = {
+            "memmap_path":  memmap_path,
+            "raster_dtype": raster_dtype,
+            "raster_shape": raster_shape,
+            "src_transform": transform,
+            # S2 (perf): comprimir los npz solo si persisten (reanudacion con
+            # archivos chicos); temporales -> np.savez plano, ~29 s/origen mas rapido.
+            "compress_npz": KEEP_PHASE1_FILES,
+            # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
         }
 
-    # Corridor astar no usa tracebacks ni reanudacion: sin huella (R2-001).
-    if not _KERNEL_CORRIDOR:
-        # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
+        warm_up_numba()
+
+        # --- S2/S1: plan de pares por modo (una raiz MCP por entrada de plan["roots"]) ---
+        if _IS_CROSS:
+            plan = planner.build_pair_plan(
+                "cross_layers", origin_points, dest_points, invert=INVERT_DIRECTION
+            )
+            n_expected = plan["n_expected"]
+            inverted = plan["inverted"]
+            print(
+                f"  Plan cross_layers: {len(origin_points)} origenes x "
+                f"{len(dest_points)} destinos = {n_expected} pares | "
+                f"invertido: {inverted} | raices MCP: {len(plan['roots'])}"
+            )
+        elif ANALYSIS_MODE == "od_pair":
+            # Una sola ruta: la raiz MCP es el origen elegido y el unico target es
+            # el destino elegido. Sin dedup did > origin_id: el par pedido tal cual
+            # (incluye origin_id > dest_id). El task unico se agrega en la cadena
+            # de tasks de abajo; los pixeles comparten el comprehension de abajo.
+            plan = planner.build_pair_plan(
+                "od_pair", all_points, origin_id=OD_ORIGIN_ID, dest_id=OD_DEST_ID
+            )
+            n_expected = plan["n_expected"]
+        # od_pair, all_pairs y single_origin comparten los pixeles de los puntos de
+        # la capa unica (los tres consumen dest_pixels_all abajo): un solo
+        # comprehension para los tres modos (edicion en un solo lugar).
+        if ANALYSIS_MODE != "cross_layers":
+            dest_pixels_all = {
+                pid: proc.world_to_pixel(transform, coords[0], coords[1])
+                for pid, coords in all_points.items()
+            }
+
+        # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster); MCP-only (dentro del else del kernel) ---
         import hashlib
         import json as _json
 
@@ -1180,230 +1216,230 @@ try:
         with open(meta_path, "w", encoding="utf-8") as _fh:
             _json.dump({"fingerprint": fingerprint}, _fh)
 
-    # --- PASO 3: FASE 1 (segun modo de analisis) ---
-    if _IS_CROSS:
-        # Un task MCP por raiz del plan. Directo: raiz = sitio y targets = fuentes;
-        # invertido: raiz = fuente y targets = sitios. Los `dest_pixels` salen
-        # SIEMPRE de los targets del plan (la capa del TARGET); tomarlos del
-        # diccionario de origenes produce KeyError y rutas al destino equivocado
-        # (hallazgo F2 de la simulacion).
-        for root_id, targets in plan["roots"].items():
-            root_coords = dest_points[root_id] if inverted else origin_points[root_id]
-            root_pixel = proc.world_to_pixel(transform, root_coords[0], root_coords[1])
-            dest_pixels = {
-                tid: proc.world_to_pixel(transform, xy[0], xy[1])
-                for tid, xy in targets.items()
-            }
-            if not dest_pixels:
-                continue
-            tasks_p1.append((root_id, root_pixel, dest_pixels, shared_data, PHASE1_DIR))
-    elif ANALYSIS_MODE == "od_pair":
-        # Un solo task de Fase 1: raiz = origen elegido, unico target = destino
-        # elegido (sin dedup did > origin_id; el par pedido tal cual).
-        origin_pixel = dest_pixels_all[OD_ORIGIN_ID]
-        dest_pixels = {OD_DEST_ID: dest_pixels_all[OD_DEST_ID]}
-        if not _KERNEL_CORRIDOR:
+        # --- PASO 3: FASE 1 (segun modo de analisis) ---
+        if _IS_CROSS:
+            # Un task MCP por raiz del plan. Directo: raiz = sitio y targets = fuentes;
+            # invertido: raiz = fuente y targets = sitios. Los `dest_pixels` salen
+            # SIEMPRE de los targets del plan (la capa del TARGET); tomarlos del
+            # diccionario de origenes produce KeyError y rutas al destino equivocado
+            # (hallazgo F2 de la simulacion).
+            for root_id, targets in plan["roots"].items():
+                root_coords = dest_points[root_id] if inverted else origin_points[root_id]
+                root_pixel = proc.world_to_pixel(transform, root_coords[0], root_coords[1])
+                dest_pixels = {
+                    tid: proc.world_to_pixel(transform, xy[0], xy[1])
+                    for tid, xy in targets.items()
+                }
+                if not dest_pixels:
+                    continue
+                tasks_p1.append((root_id, root_pixel, dest_pixels, shared_data, PHASE1_DIR))
+        elif ANALYSIS_MODE == "od_pair":
+            # Un solo task de Fase 1: raiz = origen elegido, unico target = destino
+            # elegido (sin dedup did > origin_id; el par pedido tal cual).
+            origin_pixel = dest_pixels_all[OD_ORIGIN_ID]
+            dest_pixels = {OD_DEST_ID: dest_pixels_all[OD_DEST_ID]}
             tasks_p1.append(
                 (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR)
             )
-    elif ANALYSIS_MODE == "single_origin":
-        # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
-        # puntos; sin filtro did > origin_id (los ids menores tambien corresponden)
-        # y sin pares entre los destinos.
-        n_expected = len(all_points) - 1
-        origin_coords = all_points[ORIGIN_ID]
-        origin_pixel = proc.world_to_pixel(transform, origin_coords[0], origin_coords[1])
-        dest_pixels = {did: dest_pixels_all[did] for did in all_points if did != ORIGIN_ID}
-        tasks_p1.append((ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
-    else:
-        # all_pairs: N x (N-1) / 2 via filtro did > origin_id (triangulo superior).
-        n_expected = len(all_points) * (len(all_points) - 1) // 2
-        for origin_id, origin_coords in all_points.items():
+        elif ANALYSIS_MODE == "single_origin":
+            # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
+            # puntos; sin filtro did > origin_id (los ids menores tambien corresponden)
+            # y sin pares entre los destinos.
+            n_expected = len(all_points) - 1
+            origin_coords = all_points[ORIGIN_ID]
             origin_pixel = proc.world_to_pixel(transform, origin_coords[0], origin_coords[1])
-            dest_pixels = {
-                did: dest_pixels_all[did] for did in all_points if did > origin_id
-            }
-            if not dest_pixels:
-                # El origen de mayor id no tiene destinos: evitamos un Dijkstra global
-                # inutil y un .npz enorme que la Fase 2 descartaria.
-                continue
-            tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+            dest_pixels = {did: dest_pixels_all[did] for did in all_points if did != ORIGIN_ID}
+            tasks_p1.append((ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+        else:
+            # all_pairs: N x (N-1) / 2 via filtro did > origin_id (triangulo superior).
+            n_expected = len(all_points) * (len(all_points) - 1) // 2
+            for origin_id, origin_coords in all_points.items():
+                origin_pixel = proc.world_to_pixel(transform, origin_coords[0], origin_coords[1])
+                dest_pixels = {
+                    did: dest_pixels_all[did] for did in all_points if did > origin_id
+                }
+                if not dest_pixels:
+                    # El origen de mayor id no tiene destinos: evitamos un Dijkstra global
+                    # inutil y un .npz enorme que la Fase 2 descartaria.
+                    continue
+                tasks_p1.append((origin_id, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
 
-    n_jobs_p1 = _calculate_n_jobs_for_phase(
-        raster_shape, raster_dtype, phase=1, n_tasks=len(tasks_p1)
-    )
-    if MAX_WORKERS_PHASE1:
-        _pedido = int(MAX_WORKERS_PHASE1)
-        if _pedido > n_jobs_p1:
-            import lcp.resources as _res
-
-            _pico_gb = _res.phase_peak_bytes(1, raster_shape) * _pedido / 2**30
-            print(
-                f"  AVISO: MAX_WORKERS_PHASE1={_pedido} excede el limite seguro "
-                f"para la RAM disponible ({n_jobs_p1}); se usaran {n_jobs_p1}."
-            )
-            print(
-                f"  Con {_pedido} workers el pico seria ~{_pico_gb:.1f} GB."
-            )
-        n_jobs_p1 = min(n_jobs_p1, _pedido)
-        print(f"  MAX_WORKERS_PHASE1 aplicado: {n_jobs_p1} workers")
-    if ANALYSIS_MODE == "od_pair":
-        modo_desc = f"od_pair (origen {OD_ORIGIN_ID} -> destino {OD_DEST_ID})"
-    elif ANALYSIS_MODE == "single_origin":
-        modo_desc = f"single_origin (origen {ORIGIN_ID})"
-    elif _IS_CROSS:
-        modo_desc = (
-            f"cross_layers ({len(origin_points)} x {len(dest_points)}) | "
-            f"invertido: {inverted} | n_expected: {n_expected}"
+        n_jobs_p1 = _calculate_n_jobs_for_phase(
+            raster_shape, raster_dtype, phase=1, n_tasks=len(tasks_p1)
         )
-    else:
-        modo_desc = "all_pairs (N x N)"
-    print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
-    if not _KERNEL_CORRIDOR:
+        if MAX_WORKERS_PHASE1:
+            _pedido = int(MAX_WORKERS_PHASE1)
+            if _pedido > n_jobs_p1:
+                import lcp.resources as _res
+
+                _pico_gb = _res.phase_peak_bytes(1, raster_shape) * _pedido / 2**30
+                print(
+                    f"  AVISO: MAX_WORKERS_PHASE1={_pedido} excede el limite seguro "
+                    f"para la RAM disponible ({n_jobs_p1}); se usaran {n_jobs_p1}."
+                )
+                print(
+                    f"  Con {_pedido} workers el pico seria ~{_pico_gb:.1f} GB."
+                )
+            n_jobs_p1 = min(n_jobs_p1, _pedido)
+            print(f"  MAX_WORKERS_PHASE1 aplicado: {n_jobs_p1} workers")
+        if ANALYSIS_MODE == "od_pair":
+            modo_desc = f"od_pair (origen {OD_ORIGIN_ID} -> destino {OD_DEST_ID})"
+        elif ANALYSIS_MODE == "single_origin":
+            modo_desc = f"single_origin (origen {ORIGIN_ID})"
+        elif _IS_CROSS:
+            modo_desc = (
+                f"cross_layers ({len(origin_points)} x {len(dest_points)}) | "
+                f"invertido: {inverted} | n_expected: {n_expected}"
+            )
+        else:
+            modo_desc = "all_pairs (N x N)"
+        print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
         print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
-    # --- S9: reutilizar tracebacks con huella coincidente (RESUME) ---
-    reusable = {}
-    tasks_p1_run = tasks_p1
-    if RESUME:
-        tasks_p1_run = []
-        for task in tasks_p1:
-            _npz = os.path.join(PHASE1_DIR, f"traceback_{task[0]}.npz")
-            try:
-                with np.load(_npz) as data:
-                    if "dest_ids" not in data.files or "cost_scalars" not in data.files:
-                        raise ValueError("npz sin escalares de coste")
-                    reusable[task[0]] = {
-                        int(d): float(c)
-                        for d, c in zip(data["dest_ids"], data["cost_scalars"])
-                    }
-            except Exception:
-                tasks_p1_run.append(task)
-        if reusable:
-            print(
-                f"  RESUME: reutilizando {len(reusable)} tracebacks de Fase 1 "
-                f"(huella coincide); pendientes: {len(tasks_p1_run)}"
-            )
+        # --- S9: reutilizar tracebacks con huella coincidente (RESUME) ---
+        reusable = {}
+        tasks_p1_run = tasks_p1
+        if RESUME:
+            tasks_p1_run = []
+            for task in tasks_p1:
+                _npz = os.path.join(PHASE1_DIR, f"traceback_{task[0]}.npz")
+                try:
+                    with np.load(_npz) as data:
+                        if "dest_ids" not in data.files or "cost_scalars" not in data.files:
+                            raise ValueError("npz sin escalares de coste")
+                        reusable[task[0]] = {
+                            int(d): float(c)
+                            for d, c in zip(data["dest_ids"], data["cost_scalars"])
+                        }
+                except Exception:
+                    tasks_p1_run.append(task)
+            if reusable:
+                print(
+                    f"  RESUME: reutilizando {len(reusable)} tracebacks de Fase 1 "
+                    f"(huella coincide); pendientes: {len(tasks_p1_run)}"
+                )
 
-    print(f"  Total de orígenes a procesar: {len(tasks_p1_run)}")
-    t0_p1 = time.time()
+        print(f"  Total de orígenes a procesar: {len(tasks_p1_run)}")
+        t0_p1 = time.time()
 
-    # S3: progreso por resultado consumido (tqdm.auto) y sin ruido de joblib.
-    # generator_ordered: los escalares son dicts pequenos; el buffer de orden
-    # es irrelevante en memoria y conserva el orden de envio.
-    from tqdm.auto import tqdm
+        # S3: progreso por resultado consumido (tqdm.auto) y sin ruido de joblib.
+        # generator_ordered: los escalares son dicts pequenos; el buffer de orden
+        # es irrelevante en memoria y conserva el orden de envio.
+        from tqdm.auto import tqdm
 
-    results_p1 = Parallel(
-        n_jobs=n_jobs_p1, backend="loky", verbose=0, return_as="generator"
-    )(delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run)
+        results_p1 = Parallel(
+            n_jobs=n_jobs_p1, backend="loky", verbose=0, return_as="generator"
+        )(delayed(pf.compute_and_save_cost_surface)(args) for args in tasks_p1_run)
 
-    cost_scalars_index = {}
-    with tqdm(
-        total=len(tasks_p1), desc="Fase 1 (MCP)", unit="origen", disable=None
-    ) as pbar1:
-        for oid, cdict in results_p1:
-            cost_scalars_index[oid] = cdict
-            pbar1.update(1)
+        cost_scalars_index = {}
+        with tqdm(
+            total=len(tasks_p1), desc="Fase 1 (MCP)", unit="origen", disable=None
+        ) as pbar1:
+            for oid, cdict in results_p1:
+                cost_scalars_index[oid] = cdict
+                pbar1.update(1)
 
-    # R2-001/R3-corridor-summary: en corridor, dur_p1 conserva el tiempo del
-    # kernel y no se sobrescribe con el timing de una Fase 1 vacia.
-    if not _KERNEL_CORRIDOR:
         dur_p1 = time.time() - t0_p1
         print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
-    cost_scalars_index.update(reusable)
-    failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
-    n_computed = len(cost_scalars_index) - len(failed_origins)
-    if not _KERNEL_CORRIDOR:
+        cost_scalars_index.update(reusable)
+        failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
+        n_computed = len(cost_scalars_index) - len(failed_origins)
         print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
 
-    # Fallo duro: si algun worker fallo, la red resultante quedaria incompleta
-    # y escribir un GPKG parcial seria enganoso. Detenemos antes de la Fase 2.
-    if failed_origins:
-        raise RuntimeError(
-            f"FASE 1 INCOMPLETA: {len(failed_origins)} origen(es) fallaron. "
-            f"IDs: {failed_origins[:20]}{'...' if len(failed_origins) > 20 else ''}. "
-            "Revisa los mensajes 'ERROR Fase 1' de arriba; no se escribira ningun GPKG."
-        )
-
-    # Destinos inalcanzables (coste infinito): se informan, no bloquean, y en
-    # el Paso 5 se materializan en una capa aditiva del GPKG (S8).
-    pares_inf = [
-        (oid, did)
-        for oid, cdict in cost_scalars_index.items()
-        for did, cval in cdict.items()
-        if not np.isfinite(cval)
-    ]
-    if pares_inf:
-        muestra = ", ".join(f"{oid}->{did}" for oid, did in pares_inf[:10])
-        print(
-            f"  ADVERTENCIA: {len(pares_inf)} par(es) origen-destino con coste "
-            f"infinito (inalcanzables). Muestra: {muestra}"
-            f"{'...' if len(pares_inf) > 10 else ''}."
-        )
-
-    if not _IS_CROSS:
-        # --- Camino legacy (all_pairs / single_origin): GPKG unificado ---
-        # --- PASO 4: FASE 2 (streaming: cada lote se escribe, sin acumular en RAM) ---
-        n_jobs_p2 = _calculate_n_jobs_for_phase(
-            raster_shape, raster_dtype, phase=2, n_tasks=len(tasks_p2)
-        )
-        if not _KERNEL_CORRIDOR:
-            print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
-
-        for origin_id, origin_coords in all_points.items():
-            cost_scalars = cost_scalars_index.get(origin_id, {})
-            if not cost_scalars:
-                continue
-            dest_items = [(did, all_points[did]) for did in cost_scalars]
-            tasks_p2.append(
-                (origin_id, origin_coords, dest_items, cost_scalars, transform, PHASE1_DIR)
+        # Fallo duro: si algun worker fallo, la red resultante quedaria incompleta
+        # y escribir un GPKG parcial seria enganoso. Detenemos antes de la Fase 2.
+        if failed_origins:
+            raise RuntimeError(
+                f"FASE 1 INCOMPLETA: {len(failed_origins)} origen(es) fallaron. "
+                f"IDs: {failed_origins[:20]}{'...' if len(failed_origins) > 20 else ''}. "
+                "Revisa los mensajes 'ERROR Fase 1' de arriba; no se escribira ningun GPKG."
             )
 
-        # R2-partial-corridor-gating (revision): en corridor Fase 2 no tiene
-        # tareas; el banner solo tiene sentido en modo MCP.
-        if not _KERNEL_CORRIDOR:
-            print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
-        t0_p2 = time.time()
+        # Destinos inalcanzables (coste infinito): se informan, no bloquean, y en
+        # el Paso 5 se materializan en una capa aditiva del GPKG (S8).
+        pares_inf = [
+            (oid, did)
+            for oid, cdict in cost_scalars_index.items()
+            for did, cval in cdict.items()
+            if not np.isfinite(cval)
+        ]
+        if pares_inf:
+            muestra = ", ".join(f"{oid}->{did}" for oid, did in pares_inf[:10])
+            print(
+                f"  ADVERTENCIA: {len(pares_inf)} par(es) origen-destino con coste "
+                f"infinito (inalcanzables). Muestra: {muestra}"
+                f"{'...' if len(pares_inf) > 10 else ''}."
+            )
 
-        # S1: generador sin orden -> la memoria solo sostiene UN lote de origen;
-        # cada lote se vuelca al GPKG temporal (modo 'a' tras crear con 'w').
-        results_p2 = Parallel(
-            n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
-        )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
+        if not _IS_CROSS:
+            # --- Camino legacy (all_pairs / single_origin): GPKG unificado ---
+            # --- PASO 4: FASE 2 (streaming: cada lote se escribe, sin acumular en RAM) ---
+            n_jobs_p2 = _calculate_n_jobs_for_phase(
+                raster_shape, raster_dtype, phase=2, n_tasks=len(tasks_p2)
+            )
+            print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
-        # corridor_astar ya escribio el temporal con su ruta; no se borra.
-        if not _KERNEL_CORRIDOR and os.path.exists(gpkg_tmp_path):
-            os.remove(gpkg_tmp_path)
-        with tqdm(
-            total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None
-        ) as pbar2:
-            for _origin_id, records in results_p2:
-                pbar2.update(1)
-                if not records:
+            for origin_id, origin_coords in all_points.items():
+                cost_scalars = cost_scalars_index.get(origin_id, {})
+                if not cost_scalars:
                     continue
-                gdf_lote = gpd.GeoDataFrame(records, crs=raster_crs)
-                gdf_lote.to_file(
-                    gpkg_tmp_path,
-                    layer="rutas_unificadas",
-                    driver="GPKG",
-                    mode="a" if os.path.exists(gpkg_tmp_path) else "w",
+                dest_items = [(did, all_points[did]) for did in cost_scalars]
+                tasks_p2.append(
+                    (origin_id, origin_coords, dest_items, cost_scalars, transform, PHASE1_DIR)
                 )
-                n_rutas_escritas += len(records)
 
-        if not _KERNEL_CORRIDOR:
+            print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
+            t0_p2 = time.time()
+
+            # S1: generador sin orden -> la memoria solo sostiene UN lote de origen;
+            # cada lote se vuelca al GPKG temporal (modo 'a' tras crear con 'w').
+            results_p2 = Parallel(
+                n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
+            )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
+
+            # La Fase 2 MCP escribe desde cero: un temporal previo (corrida
+            # abortada) se elimina antes del primer lote.
+            if os.path.exists(gpkg_tmp_path):
+                os.remove(gpkg_tmp_path)
+            with tqdm(
+                total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None
+            ) as pbar2:
+                for _origin_id, records in results_p2:
+                    pbar2.update(1)
+                    if not records:
+                        continue
+                    gdf_lote = gpd.GeoDataFrame(records, crs=raster_crs)
+                    gdf_lote.to_file(
+                        gpkg_tmp_path,
+                        layer="rutas_unificadas",
+                        driver="GPKG",
+                        mode="a" if os.path.exists(gpkg_tmp_path) else "w",
+                    )
+                    n_rutas_escritas += len(records)
+
             dur_p2 = time.time() - t0_p2
-            # R3-001 (revision): en corridor la Fase 2 no corre; sus
-            # banners confundirian la lectura de tiempos y rutas.
             print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
             print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
+    if not _IS_CROSS:
         # --- PASO 5: GeoPackage (rename atomico del temporal) ---
         print("\n[Paso 5/5] Escribiendo GeoPackage unificado...")
 
         if not n_rutas_escritas:
-            print("  ADVERTENCIA: no se generó ninguna ruta; se omite la escritura del GPKG.")
+            print(
+                "  ADVERTENCIA: no se gener\u00f3 ninguna ruta; se escribe el GPKG "
+                "con la capa rutas_unificadas vacia."
+            )
             routes_gdf = gpd.GeoDataFrame(geometry=[], crs=raster_crs)
+            # S4/R3-corridor-unreachable-not-materialized (revision): el GPKG
+            # debe tener SIEMPRE el esquema de la corrida (hoy podia quedar
+            # solo con destinos_inalcanzables): se escribe la capa
+            # rutas_unificadas vacia (mode="w", mismo CRS) ademas de la capa
+            # de abajo.
+            routes_gdf.to_file(
+                gpkg_output_path, layer="rutas_unificadas", driver="GPKG", mode="w"
+            )
         else:
             os.replace(gpkg_tmp_path, gpkg_output_path)
             print(f"[Paso 5/5] {n_rutas_escritas} rutas guardadas en: {gpkg_output_path}")

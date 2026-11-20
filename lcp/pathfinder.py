@@ -215,6 +215,50 @@ def heuristic_numba(r1, c1, r2, c2, dx, dy):
 
 
 @njit(cache=True)
+def _heap_sift_up(heap, pos):
+    # S7 (revision): heap binario manual del open set (numba no soporta heapq
+    # con listas tipadas de forma fiable). Mueve heap[pos] hacia arriba
+    # mientras su padre tenga f (columna 0) mayor.
+    while pos > 0:
+        parent = (pos - 1) // 2
+        if heap[parent, 0] > heap[pos, 0]:
+            for k in range(4):
+                tmp = heap[parent, k]
+                heap[parent, k] = heap[pos, k]
+                heap[pos, k] = tmp
+            pos = parent
+        else:
+            break
+
+
+@njit(cache=True)
+def _heap_sift_down(heap, n, pos):
+    # Hundir heap[pos] dentro del heap de tamano n mientras algun hijo tenga
+    # f menor.
+    while True:
+        left = 2 * pos + 1
+        if left >= n:
+            break
+        smallest = left
+        right = left + 1
+        if right < n and heap[right, 0] < heap[left, 0]:
+            smallest = right
+        if heap[smallest, 0] < heap[pos, 0]:
+            for k in range(4):
+                tmp = heap[pos, k]
+                heap[pos, k] = heap[smallest, k]
+                heap[smallest, k] = tmp
+            pos = smallest
+        else:
+            break
+
+
+# Capacidad inicial del heap del open set; crece por duplicacion cuando se
+# llena (el numero de push depende del area explorada, no se conoce a priori).
+_HEAP_INITIAL_CAPACITY = 1024
+
+
+@njit(cache=True)
 def a_star_search(cost_array, nodata_value, start_pixel, end_pixel, dx, dy, weight, search_mask):
     """
     A* sobre el raster de coste, optimizado con Numba (puerto fiel de main).
@@ -223,26 +267,42 @@ def a_star_search(cost_array, nodata_value, start_pixel, end_pixel, dx, dy, weig
     celda es (dr, dc) con dr = direction // 3 - 1 y dc = direction % 3 - 1.
     Devuelve (path_found, came_from); la ruta se reconstruye con
     `reconstruct_path`.
+
+    S7 (revision): el open set es un heap binario manual (array (n,4) float64
+    con columnas [f, g, r, c], sift-up/sift-down manuales y crecimiento por
+    duplicacion); antes se hacia vstack + argmin por pop, cuadratico en celdas
+    exploradas. Misma semantica de f/g: se extrae siempre la entrada de f
+    minimo; entre empates el orden de desempate puede diferir, lo que puede
+    cambiar la ruta elegida entre rutas de coste identico (igual que el
+    comportamiento documentado del kernel para empates).
     """
     height, width = cost_array.shape
     g_cost = np.full(cost_array.shape, np.inf, dtype=np.float64)
     came_from = np.full(cost_array.shape, -1, dtype=np.int16)
 
-    open_set = np.zeros((1, 4), dtype=np.float64)
+    capacity = _HEAP_INITIAL_CAPACITY
+    heap = np.empty((capacity, 4), dtype=np.float64)
+    n_heap = 0
+
     h_initial = heuristic_numba(start_pixel[0], start_pixel[1], end_pixel[0], end_pixel[1], dx, dy)
-    open_set[0] = [h_initial * weight, 0.0, start_pixel[0], start_pixel[1]]
+    heap[0, 0] = h_initial * weight
+    heap[0, 1] = 0.0
+    heap[0, 2] = float(start_pixel[0])
+    heap[0, 3] = float(start_pixel[1])
+    n_heap = 1
     g_cost[start_pixel] = 0.0
     path_found = False
 
-    while open_set.shape[0] > 0:
-        min_idx = np.argmin(open_set[:, 0])
-        _f, g, r, c = open_set[min_idx]
-        current_pos = (int(r), int(c))
+    while n_heap > 0:
+        g = heap[0, 1]
+        current_pos = (int(heap[0, 2]), int(heap[0, 3]))
 
-        if open_set.shape[0] == 1:
-            open_set = np.zeros((0, 4), dtype=np.float64)
-        else:
-            open_set = np.vstack((open_set[:min_idx], open_set[min_idx + 1:]))
+        # Pop de la raiz: la ultima entrada ocupa su lugar y se hunde.
+        n_heap -= 1
+        if n_heap > 0:
+            for k in range(4):
+                heap[0, k] = heap[n_heap, k]
+            _heap_sift_down(heap, n_heap, 0)
 
         if current_pos == end_pixel:
             path_found = True
@@ -279,10 +339,21 @@ def a_star_search(cost_array, nodata_value, start_pixel, end_pixel, dx, dy, weig
                     h = heuristic_numba(neighbor_pos[0], neighbor_pos[1], end_pixel[0], end_pixel[1], dx, dy)
                     new_f_cost = tentative_g_cost + (h * weight)
 
-                    new_entry = np.array(
-                        [[new_f_cost, tentative_g_cost, float(neighbor_pos[0]), float(neighbor_pos[1])]]
-                    )
-                    open_set = np.vstack((open_set, new_entry))
+                    # Push con crecimiento por duplicacion cuando el heap
+                    # esta lleno (se copian solo las n_heap entradas vivas).
+                    if n_heap == capacity:
+                        new_heap = np.empty((capacity * 2, 4), dtype=np.float64)
+                        for i in range(n_heap):
+                            for k in range(4):
+                                new_heap[i, k] = heap[i, k]
+                        heap = new_heap
+                        capacity = capacity * 2
+                    heap[n_heap, 0] = new_f_cost
+                    heap[n_heap, 1] = tentative_g_cost
+                    heap[n_heap, 2] = float(neighbor_pos[0])
+                    heap[n_heap, 3] = float(neighbor_pos[1])
+                    n_heap += 1
+                    _heap_sift_up(heap, n_heap - 1)
 
     return path_found, came_from
 
@@ -312,6 +383,13 @@ def reconstruct_path(came_from_array, start_pixel, end_pixel):
         current_pos_r -= dr
         current_pos_c -= dc
         count += 1
+
+    # S8/R3-reconstruct-path-limit-oob (revision): si el bucle agoto la cota
+    # (came_from corrupto, p. ej. un ciclo) sin llegar al inicio, count == limit
+    # y el write final caeria fuera del array (indices 0..limit-1). Devolver
+    # None en vez de escribir fuera de rango bajo numba sin bounds checking.
+    if count >= limit:
+        return None
 
     path[count] = np.array([start_pixel[0], start_pixel[1]])
     return path[: count + 1][::-1]
@@ -368,16 +446,60 @@ def corridor_astar_route(
     parametro que mas afecta si el corredor contiene la ruta optima.
     Cambiarlos cambia la calidad de la ruta silenciosamente.
 
-    R3-astar-heuristic-admissibility (revision): con `heuristic_weight=1.0`
-    la heuristica euclidiana es admisible SOLO si todo coste de celda es
-    >= 1.0; en superficies con costes < 1.0 puede sobreestimar y la ruta
-    puede ser suboptima bajo el propio modelo del kernel. `heuristic_weight=0`
-    convierte la busqueda en Dijkstra exacto (mas lento, sin direccion).
+    R3-astar-heuristic-admissibility (revision): la heuristica euclidiana
+    ponderada es admisible solo si heuristic_weight <= minimo de coste
+    transitable de la superficie; si weight lo excede puede sobreestimar
+    y la ruta puede ser suboptima bajo el propio modelo del kernel. La
+    deteccion es runtime: con weight > 0 y weight > min_coste se emite
+    una ADVERTENCIA que sugiere bajar HEURISTIC_WEIGHT (R2/R3 del quinto
+    review: la condicion es weight-relativa, no el umbral fijo 1.0, que
+    dejaba sin aviso a weight > 1.0 con costes en [1.0, weight) y avisaba
+    en vano con 0 < weight < min_coste). `heuristic_weight=0` convierte
+    la busqueda en Dijkstra exacto (mas lento, sin direccion y siempre
+    admisible). Un weight no finito (NaN/inf) o negativo levanta ValueError:
+    premia alejarse del objetivo y produce rutas arbitrarias.
     """
     import lcp.processing as proc
 
     start_pixel = (int(start_pixel[0]), int(start_pixel[1]))
     end_pixel = (int(end_pixel[0]), int(end_pixel[1]))
+
+    # R3-heuristic-weight-unvalidated (quinto review) + R3-001 (sexto
+    # review): un weight negativo hace f = g + w*h premiar la lejania del
+    # objetivo y bypassuea el guard de abajo; NaN/inf pasan ambos umbrales
+    # (< 0 y > 0) y corrompen el puntaje en silencio. Rechazo explicito de
+    # todo weight no finito o negativo.
+    if not math.isfinite(heuristic_weight) or heuristic_weight < 0:
+        raise ValueError(
+            f"HEURISTIC_WEIGHT invalido: {heuristic_weight}. Debe ser un "
+            "numero finito no negativo (0 = Dijkstra exacto); un peso "
+            "negativo premia alejarse del objetivo y NaN/inf corrompen el "
+            "puntaje f = g + w*h."
+        )
+
+    # S6/R3-heuristic-admissibility-no-runtime-guard: con weight > 0, la
+    # heuristica euclidiana sobreestima el coste restante cuando weight
+    # excede el minimo de coste transitable (la ruta puede ser suboptima
+    # bajo el propio modelo del kernel). Deteccion runtime weight-relativa
+    # con un solo pase sobre las celdas transitables (excluye
+    # inf/nodata/NaN): aceptable porque corridor_astar solo corre 1->1.
+    # weight=0 equivale a Dijkstra exacto y siempre es admisible: sin aviso.
+    if heuristic_weight > 0 and search_mask.any():
+        _traversable = cost_data[search_mask]
+        _traversable = _traversable[
+            np.isfinite(_traversable) & (_traversable != nodata_value)
+        ]
+        if _traversable.size:
+            _min_cost = float(np.nanmin(_traversable))
+            if _min_cost < heuristic_weight:
+                print(
+                    f"  ADVERTENCIA: el minimo de coste transitable "
+                    f"({_min_cost:.4g}) es menor que heuristic_weight="
+                    f"{heuristic_weight}: la heuristica euclidiana puede "
+                    "sobreestimar y la ruta puede ser suboptima. Baje "
+                    f"HEURISTIC_WEIGHT a <= {_min_cost:.4g} (o 0 = Dijkstra "
+                    "exacto, mas lento) si la optimalidad importa."
+                )
 
     path_pixels_lr = None
     successful_factor = None

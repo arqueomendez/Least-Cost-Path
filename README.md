@@ -113,6 +113,7 @@ Parámetros editables por el usuario:
 | `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
 | `MAX_WORKERS_PHASE1`   | `None` = automático. La Celda 2 detecta el hardware (RAM disponible, núcleos físicos/lógicos, disco) y **sugiere** los workers con el modelo de memoria medido; un entero actúa como tope y, si excede lo que permite la RAM, se avisa y se recorta |
 | `KERNEL`               | `"mcp_geometric"` (default, todos los modos) o `"corridor_astar"` (solo `od_pair`): algoritmo de cálculo de la ruta (ver «Kernel de cálculo: mcp_geometric y corridor_astar») |
+| `HEURISTIC_WEIGHT`     | Solo con `KERNEL="corridor_astar"`: peso de la heurística euclidiana (`1.0` default). Es admisible solo si todo coste de celda es ≥ 1.0; con costes menores el kernel **avisa en runtime** y la ruta puede ser subóptima bajo su propio modelo; `0` = Dijkstra exacto (más lento, sin dirección al objetivo y siempre admisible) |
 | `EDGE_BUFFER_PX`       | `0` = no excluye nada. `N` excluye las `N` filas/columnas exteriores del ráster: corta el corredor perimetral cuando el modelo de coste es poco fiable en los límites (la máscara del polígono es siempre **estricta**, no configurable) |
 
 ### Celda 4 — Verificación de coherencia de datos
@@ -472,7 +473,7 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p O
 
 **Limitaciones de `corridor_astar`**: el modelo de coste difiere del geométrico de skimage, por lo que la ruta y el `cost_total` pueden diferir levemente de los del kernel default para el mismo par; en rásters pequeños la ventaja es nula o inversa (dos fases de overhead); solo está disponible para un par a la vez. Los resultados comparados entre kernels son válidos como **costes independientes por modelo**, no como el mismo modelo con distinto orden de exploración.
 
-**Admisibilidad de la heurística (solo `corridor_astar`)**: el kernel usa una heurística euclidiana con `heuristic_weight = 1.0`, que es admisible (garantiza la ruta óptima bajo su propio modelo de coste) solo si **todo coste de celda de la superficie es ≥ 1.0**. En superficies con costes por debajo de 1 (p. ej. velocidades de marcha normalizadas) la heurística sobreestima el coste restante y la ruta puede ser subóptima *dentro del propio kernel*. Si la optimalidad importa sobre esa clase de superficies, definiendo `HEURISTIC_WEIGHT = 0` en la firma de `corridor_astar_route` la búsqueda se vuelve Dijkstra exacto (más lento, sin dirección al objetivo).
+**Admisibilidad de la heurística (solo `corridor_astar`)**: el kernel usa una heurística euclidiana ponderada por `HEURISTIC_WEIGHT` (Celda 3, default `1.0`), que es admisible (garantiza la ruta óptima bajo su propio modelo de coste) solo si **todo coste de celda de la superficie es ≥ 1.0**. En superficies con costes por debajo de 1 (p. ej. velocidades de marcha normalizadas) la heurística sobreestima el coste restante y la ruta puede ser subóptima *dentro del propio kernel*: el kernel **detecta esta situación en runtime** (mínimo de coste sobre las celdas transitables, excluyendo nodata) y emite una advertencia. Si la optimalidad importa sobre esa clase de superficies, definiendo `HEURISTIC_WEIGHT = 0` en la Celda 3 (o `-p HEURISTIC_WEIGHT 0` en papermill) la búsqueda se vuelve Dijkstra exacto (más lento, sin dirección al objetivo y siempre admisible).
 
 **Nota sobre paralelización por tiles**: la experimentación con divisiones del ráster en tiles (`LCP-parallel-tile`) queda como **feature futuro**: la implementación resultó compleja y con artefactos en los bordes de tile, y no forma parte de esta versión.
 
@@ -503,6 +504,8 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p O
 ```
 
 **Salida**: el mismo `red_completa_unificada.gpkg` con **1 fila** (`origin_id`, `dest_id`, `cost_total`, `length_m`, `n_vertices`) — sin dedup: si `origin_id > dest_id` el par se calcula igual. La Celda 6 imprime `MODO: od_pair (origen X -> destino Y) | rutas esperadas: 1`.
+
+**Casos límite (nunca silenciosos)**: si el origen y el destino caen en el **mismo píxel** (ids distintos, misma celda del raster — la validación de mismo píxel de la Celda 4 solo aplica a `cross_layers`) o el destino es **inalcanzable** (p. ej. tras una barrera de nodata, con cualquier kernel), no se escribe ninguna ruta: el par queda registrado en la capa `destinos_inalcanzables` y la capa `rutas_unificadas` se escribe **siempre** (vacía si no hay rutas), de modo que el GPKG conserva el esquema completo en cualquier corrida.
 
 ### Modo cross_layers
 
