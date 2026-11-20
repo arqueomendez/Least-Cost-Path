@@ -43,6 +43,14 @@ def test_cell3_mode_comment_mentions_od_pair():
     assert '"od_pair"' in src
 
 
+def test_cell3_declares_heuristic_weight_knob():
+    # S6/R3-heuristic-admissibility-no-runtime-guard: knob user-facing en la
+    # Celda 3 (parametrizable con papermill -p HEURISTIC_WEIGHT) y pasado al
+    # kernel corridor_astar en la Celda 6.
+    assert "HEURISTIC_WEIGHT = 1.0" in _source(CELL_PARAMS)
+    assert "heuristic_weight=HEURISTIC_WEIGHT" in _source(CELL_EXEC)
+
+
 # ---------------------------------------------------------------------------
 # Celda 4: preview y seleccion estricta (S3, S4)
 # ---------------------------------------------------------------------------
@@ -106,7 +114,12 @@ def test_cell6_phase1_single_task_for_od_pair():
     # R2-brittle-test-pin/R3-002 (revision): el match se hace sobre el source
     # NORMALIZADO (whitespace colapsado) para no romper con un re-indentado
     # inocente del notebook, sin dejar de exigir el root exacto.
-    assert "if not _KERNEL_CORRIDOR:" in src
+    # R2-corridor-gating-scatter (4to review): el switch del kernel vive en un
+    # UNICO if/else en la Celda 6; el task MCP queda dentro de la rama MCP
+    # (else). Solo quedan DOS referencias de gating: el split y el texto del
+    # resumen, mas el guard conservado del tmp (implicito dentro del else).
+    assert src.count("if _KERNEL_CORRIDOR") == 2
+    assert src.count("if not _KERNEL_CORRIDOR") == 1
     normalized = " ".join(src.split())
     assert "tasks_p1.append( (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR) )" in normalized
 
@@ -255,6 +268,131 @@ def test_e2e_corridor_astar_writes_single_route_and_skips_mcp(tmp_path):
     assert "RESUMEN DE EJECUCIÓN (corridor_astar)" in (_out or "")
 
 
+def test_e2e_corridor_same_pixel_pair_is_not_silent(tmp_path):
+    # S3/R3-corridor-same-pixel-silent-loss (revision): dos puntos DISTINTOS
+    # (ids distintos) que caen en el MISMO pixel del raster con el kernel
+    # corridor_astar: el par se registra explicitamente en
+    # destinos_inalcanzables y la capa rutas_unificadas queda presente y
+    # vacia; nunca se pierde en silencio.
+    raster = tmp_path / "cost_same_pixel.tif"
+    nh.write_synthetic_raster(str(raster))
+    points = tmp_path / "points_same_pixel.shp"
+    schema = {"geometry": "Point", "properties": {"id": "int", "nombre": "str"}}
+    with fiona.open(
+        points, "w", driver="ESRI Shapefile", schema=schema, crs="EPSG:32719"
+    ) as dst:
+        # (10.5, 89.5) y (10.7, 89.7): ambos en el pixel (row 10, col 10).
+        dst.write(
+            {
+                "geometry": mapping(Point(10.5, 89.5)),
+                "properties": {"id": 1, "nombre": "a"},
+            }
+        )
+        dst.write(
+            {
+                "geometry": mapping(Point(10.7, 89.7)),
+                "properties": {"id": 2, "nombre": "b"},
+            }
+        )
+    repl = {
+        "OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')": (
+            f"OUTPUT_DIR = os.path.join({str(tmp_path)!r}, 'corridor_same_pixel')"
+        ),
+        "COST_RASTER_PATH = os.path.join(DATA_DIR, 'cost.tif')": (
+            f"COST_RASTER_PATH = {str(raster)!r}"
+        ),
+        "ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'points.shp')": (
+            f"ALL_POINTS_SHAPEFILE = {str(points)!r}"
+        ),
+        'ANALYSIS_MODE = "all_pairs"': 'ANALYSIS_MODE = "od_pair"',
+        "MASK_SHAPEFILE_PATH = os.path.join(DATA_DIR, 'area-mask.shp')": (
+            "MASK_SHAPEFILE_PATH = None"
+        ),
+        "MAX_WORKERS_PHASE1 = None": "MAX_WORKERS_PHASE1 = 1",
+        'KERNEL = "mcp_geometric"': 'KERNEL = "corridor_astar"',
+        "ORIGIN_SELECT_VALUE = None": 'ORIGIN_SELECT_VALUE = "1"',
+        "DEST_SELECT_VALUE = None": 'DEST_SELECT_VALUE = "2"',
+    }
+    srcs = nh.load_code_sources()
+    srcs[2] = nh.patch_cell3(srcs[2], repl)
+    _out, err = nh.run_code([*srcs[:4], srcs[5]], timeout=600)
+    assert err is None, err
+    gpkg = tmp_path / "corridor_same_pixel" / "red_completa_unificada.gpkg"
+    assert gpkg.exists()
+    # La capa rutas_unificadas existe SIEMPRE (aqui, vacia).
+    assert "rutas_unificadas" in set(fiona.listlayers(str(gpkg)))
+    assert len(gpd.read_file(gpkg, layer="rutas_unificadas")) == 0
+    unreachable = gpd.read_file(gpkg, layer="destinos_inalcanzables")
+    assert len(unreachable) == 1
+    row = unreachable.iloc[0]
+    assert int(row["origin_id"]) == 1
+    assert int(row["dest_id"]) == 2
+    # El caso se reporta en stdout: nada silencioso.
+    assert "MISMO pixel" in _out
+
+
+def test_e2e_corridor_unreachable_pair_materialized(tmp_path):
+    # S4/R3-corridor-unreachable-not-materialized (revision): cuando
+    # corridor_astar no encuentra ruta, el par inalcanzable se materializa en
+    # la capa destinos_inalcanzables (igual que el camino MCP) y la capa
+    # rutas_unificadas existe vacia; no queda solo en stdout.
+    raster = tmp_path / "cost_corridor_barrier.tif"
+    nh.write_barrier_raster(str(raster), barrier_col=50)
+    points = tmp_path / "points_corridor_barrier.shp"
+    schema = {"geometry": "Point", "properties": {"id": "int", "nombre": "str"}}
+    with fiona.open(
+        points, "w", driver="ESRI Shapefile", schema=schema, crs="EPSG:32719"
+    ) as dst:
+        dst.write(
+            {
+                "geometry": mapping(Point(10.5, 89.5)),
+                "properties": {"id": 1, "nombre": "oeste"},
+            }
+        )
+        dst.write(
+            {
+                "geometry": mapping(Point(60.5, 40.5)),
+                "properties": {"id": 3, "nombre": "este"},
+            }
+        )
+    repl = {
+        "OUTPUT_DIR = os.path.join(BASE_DIR, 'output', f'session_{timestamp}_Refactored')": (
+            f"OUTPUT_DIR = os.path.join({str(tmp_path)!r}, 'corridor_unreachable')"
+        ),
+        "COST_RASTER_PATH = os.path.join(DATA_DIR, 'cost.tif')": (
+            f"COST_RASTER_PATH = {str(raster)!r}"
+        ),
+        "ALL_POINTS_SHAPEFILE = os.path.join(DATA_DIR, 'points.shp')": (
+            f"ALL_POINTS_SHAPEFILE = {str(points)!r}"
+        ),
+        'ANALYSIS_MODE = "all_pairs"': 'ANALYSIS_MODE = "od_pair"',
+        "MASK_SHAPEFILE_PATH = os.path.join(DATA_DIR, 'area-mask.shp')": (
+            "MASK_SHAPEFILE_PATH = None"
+        ),
+        "MAX_WORKERS_PHASE1 = None": "MAX_WORKERS_PHASE1 = 1",
+        'KERNEL = "mcp_geometric"': 'KERNEL = "corridor_astar"',
+        'ORIGIN_SELECT_FIELD = "id"': 'ORIGIN_SELECT_FIELD = "nombre"',
+        "ORIGIN_SELECT_VALUE = None": 'ORIGIN_SELECT_VALUE = "oeste"',
+        'DEST_SELECT_FIELD = "id"': 'DEST_SELECT_FIELD = "nombre"',
+        "DEST_SELECT_VALUE = None": 'DEST_SELECT_VALUE = "este"',
+    }
+    srcs = nh.load_code_sources()
+    srcs[2] = nh.patch_cell3(srcs[2], repl)
+    _out, err = nh.run_code([*srcs[:4], srcs[5]], timeout=600)
+    assert err is None, err
+    gpkg = tmp_path / "corridor_unreachable" / "red_completa_unificada.gpkg"
+    assert gpkg.exists()
+    assert "rutas_unificadas" in set(fiona.listlayers(str(gpkg)))
+    assert len(gpd.read_file(gpkg, layer="rutas_unificadas")) == 0
+    unreachable = gpd.read_file(gpkg, layer="destinos_inalcanzables")
+    assert len(unreachable) == 1
+    row = unreachable.iloc[0]
+    assert int(row["origin_id"]) == 1
+    assert int(row["dest_id"]) == 3
+    assert not np.isfinite(row["cost_total"])
+    assert "Sin ruta alcanzable" in _out
+
+
 def test_e2e_od_pair_missing_selection_shows_preview_and_stops(tmp_path):
     # S4: valores sin definir -> tabla de candidatos y detencion; nunca elige.
     srcs = _od_sources(tmp_path, "od_preview")
@@ -316,9 +454,11 @@ def test_e2e_od_pair_origin_equals_dest_rejected(tmp_path):
 
 def test_e2e_od_pair_unreachable_destination_reported_not_silent(tmp_path):
     # R3-5: destino al otro lado de una barrera de nodata = inalcanzable.
-    # La corrida no escribe rutas: la capa rutas_unificadas queda vacia o sin
-    # crear, el par aparece en destinos_inalcanzables con coste infinito y el
-    # aviso se imprime (n_expected=1, escritas=0) en vez de perderse callado.
+    # La corrida no escribe rutas: la capa rutas_unificadas queda SIEMPRE
+    # presente y vacia (R3-corridor-unreachable-not-materialized: el esquema
+    # del GPKG no depende de haber encontrado rutas), el par aparece en
+    # destinos_inalcanzables con coste infinito y el aviso se imprime
+    # (n_expected=1, escritas=0) en vez de perderse callado.
     raster = tmp_path / "cost_barrier.tif"
     nh.write_barrier_raster(str(raster), barrier_col=50)
     points = tmp_path / "points_barrier.shp"
@@ -364,10 +504,10 @@ def test_e2e_od_pair_unreachable_destination_reported_not_silent(tmp_path):
     assert err is None, err
     gpkg = tmp_path / "od_unreachable" / "red_completa_unificada.gpkg"
     assert gpkg.exists()
-    layers = set(fiona.listlayers(str(gpkg)))
-    if "rutas_unificadas" in layers:
-        gdf = gpd.read_file(gpkg, layer="rutas_unificadas")
-        assert len(gdf) == 0
+    # T4: la capa rutas_unificadas ahora existe SIEMPRE (vacia si no hay rutas).
+    assert "rutas_unificadas" in set(fiona.listlayers(str(gpkg)))
+    gdf = gpd.read_file(gpkg, layer="rutas_unificadas")
+    assert len(gdf) == 0
     unreachable = gpd.read_file(gpkg, layer="destinos_inalcanzables")
     assert len(unreachable) == 1
     row = unreachable.iloc[0]
