@@ -3,7 +3,36 @@
 Cambios destacados, agrupados por hito. El detalle vive en los commits
 (Conventional) y en los documentos `odd/tasks/` (specs S#, log L#).
 
-## Sin versión — publicado en `origin/LCP_MCP_Geometric` (rama principal)
+## 0.1.0 — 2026-11-20 — publicado en `origin/LCP_MCP_Geometric` (tronco 343d5d4)
+
+### cross-layer-mode (modo de dos capas, salidas por raíz e inversión de dirección)
+
+- **`ANALYSIS_MODE = "cross_layers"`**: las rutas van de **cada** punto de una
+  capa de orígenes hacia **todos** los de una capa de destinos (M×N), con las
+  capas en diccionarios separados y sin deduplicación por id.
+- **Plan de pares por raíz** (`lcp.planner.build_pair_plan`): una corrida MCP
+  por raíz (sitio o fuente según `INVERT_DIRECTION`: `"auto"`/`"never"`/
+  `"always"`); rutas registradas con la misma semántica sitio→fuente; coste
+  acumulado idéntico por simetría, geometría posiblemente distinta por empates.
+- **Salidas no unificadas por raíz**: GPKG, PNG, densificado y GeoTIFF por raíz
+  con escritura atómica por archivo, más `manifest_rutas_por_origen.csv`
+  reescrito tras cada raíz (estado parcial legible tras un corte).
+- **Validación extendida (Celda 4)**: CRS y píxeles válidos de ambas capas y
+  aborto si un sitio y una fuente caen en el mismo píxel.
+
+### corridor-astar-kernel (kernel A* jerárquico 1→1, solo od_pair)
+
+- **`KERNEL`**: `"mcp_geometric"` (default, todos los modos) o
+  `"corridor_astar"`, un A* jerárquico dirigido al objetivo disponible solo para
+  `od_pair` (`check_kernel` en la Celda 4).
+- Fase 1 en baja resolución con escalera de factores 32/20/10, corredor de
+  150 px alrededor de la ruta LR intersectado con la máscara, Fase 2 en alta
+  resolución dentro del corredor y **Plan B** (A* en toda la máscara) si el
+  corredor no produce ruta.
+- **`HEURISTIC_WEIGHT`**: peso de la heurística euclidiana (default `1.0`);
+  admisibilidad **weight-relativa** con aviso en runtime (weight > mínimo de
+  coste transitable), `0` = Dijkstra exacto, y `ValueError` para weight no
+  finito o negativo.
 
 ### od-pair-mode (ruta única origen → destino sin confusión id vs fid)
 
