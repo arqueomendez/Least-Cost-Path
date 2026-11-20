@@ -112,6 +112,7 @@ Parámetros editables por el usuario:
 | `KEEP_PHASE1_FILES`    | `False` elimina `phase1_tracebacks/` al finalizar; `True` los conserva      |
 | `RESUME`               | `True` reutiliza los `.npz` de Fase 1 si la huella (puntos+ráster+modo) coincide |
 | `MAX_WORKERS_PHASE1`   | `None` = automático. La Celda 2 detecta el hardware (RAM disponible, núcleos físicos/lógicos, disco) y **sugiere** los workers con el modelo de memoria medido; un entero actúa como tope y, si excede lo que permite la RAM, se avisa y se recorta |
+| `KERNEL`               | `"mcp_geometric"` (default, todos los modos) o `"corridor_astar"` (solo `od_pair`): algoritmo de cálculo de la ruta (ver «Kernel de cálculo: mcp_geometric y corridor_astar») |
 | `EDGE_BUFFER_PX`       | `0` = no excluye nada. `N` excluye las `N` filas/columnas exteriores del ráster: corta el corredor perimetral cuando el modelo de coste es poco fiable en los límites (la máscara del polígono es siempre **estricta**, no configurable) |
 
 ### Celda 4 — Verificación de coherencia de datos
@@ -450,6 +451,30 @@ uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE all_pairs
 **Rendimiento**: el modo estrella ejecuta 1 MCP en vez de N−1 (con los datos de ejemplo, Fase 1 de ~1,9 s a ~0,2 s y un solo worker).
 
 **Casos límite**: `N = 1` en modo estrella genera un task degenerado (fuera del dominio previsto); los destinos inalcanzables no bloquean pero se informan con sus IDs.
+
+### Kernel de cálculo: `mcp_geometric` y `corridor_astar`
+
+Además del modo, la Celda 3 permite elegir **cómo se calcula la ruta** con el parámetro `KERNEL`. Es una **opción de cálculo, no un reemplazo**: el pipeline MCP (`mcp_geometric`) sigue siendo el default y el comportamiento de todas las corridas existentes no cambia salvo que el usuario elija el kernel alternativo.
+
+| | `mcp_geometric` (default) | `corridor_astar` |
+|---|---|---|
+| Algoritmo | Dijkstra exacto con coste geométrico (`skimage.graph.MCP_Geometric`, 8-conectado) | A* jerárquico dirigido al objetivo: Fase 1 en baja resolución (32×/20×/10×) delimita un corredor y Fase 2 busca en alta resolución solo dentro de él; si el corredor no produce ruta, reintenta en toda la máscara |
+| Modos donde está habilitado | **todos** | **solo `od_pair`** (validado en Celda 4; en otros modos aborta con error explicativo) |
+| Modelo de coste | Interpolación geométrica entre celdas (semántica de skimage) | Media de costes de celda × distancia euclidiana entre centros de píxel (modelo de la versión legacy) |
+| Cuándo conviene | Todos los usos habituales; **obligatorio** para `all_pairs`, `single_origin` y `cross_layers` (una corrida MCP por raíz sirve a todos los destinos) | Una **ruta 1→1 en rásters grandes**: Dijkstra expande uniformemente y puede explorar casi toda la superficie para un destino lejano; el A* con corredor es dirigido y acota el área explorada |
+| Salidas | `red_completa_unificada.gpkg` y todo el flujo posterior intacto | **El mismo** GPKG y flujo posterior; solo cambia cómo se calcula la única ruta |
+
+**Selección** (Celda 3, o sin abrir Jupyter):
+
+```sh
+uv run papermill LCP_MCP_Geometric.ipynb out.ipynb -p ANALYSIS_MODE od_pair -p ORIGIN_SELECT_VALUE 5 -p DEST_SELECT_VALUE 3 -p KERNEL corridor_astar
+```
+
+**Limitaciones de `corridor_astar`**: el modelo de coste difiere del geométrico de skimage, por lo que la ruta y el `cost_total` pueden diferir levemente de los del kernel default para el mismo par; en rásters pequeños la ventaja es nula o inversa (dos fases de overhead); solo está disponible para un par a la vez. Los resultados comparados entre kernels son válidos como **costes independientes por modelo**, no como el mismo modelo con distinto orden de exploración.
+
+**Admisibilidad de la heurística (solo `corridor_astar`)**: el kernel usa una heurística euclidiana con `heuristic_weight = 1.0`, que es admisible (garantiza la ruta óptima bajo su propio modelo de coste) solo si **todo coste de celda de la superficie es ≥ 1.0**. En superficies con costes por debajo de 1 (p. ej. velocidades de marcha normalizadas) la heurística sobreestima el coste restante y la ruta puede ser subóptima *dentro del propio kernel*. Si la optimalidad importa sobre esa clase de superficies, definiendo `HEURISTIC_WEIGHT = 0` en la firma de `corridor_astar_route` la búsqueda se vuelve Dijkstra exacto (más lento, sin dirección al objetivo).
+
+**Nota sobre paralelización por tiles**: la experimentación con divisiones del ráster en tiles (`LCP-parallel-tile`) queda como **feature futuro**: la implementación resultó compleja y con artefactos en los bordes de tile, y no forma parte de esta versión.
 
 ### Modo od_pair
 

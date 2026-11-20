@@ -99,8 +99,16 @@ def test_cell6_fingerprint_includes_od_ids():
 
 def test_cell6_phase1_single_task_for_od_pair():
     src = _source(CELL_EXEC)
-    # Un solo task de Fase 1 con la raiz = origen elegido.
-    assert "tasks_p1.append((OD_ORIGIN_ID" in src
+    # Un solo task de Fase 1 con la raiz = origen elegido; con el kernel
+    # corridor_astar (KERNEL opcional) el task MCP se omite para od_pair.
+    # R2-003/R3-odpair-task-assert (revision): el pin debe exigir el root
+    # exacto OD_ORIGIN_ID, no cualquier append de la celda.
+    # R2-brittle-test-pin/R3-002 (revision): el match se hace sobre el source
+    # NORMALIZADO (whitespace colapsado) para no romper con un re-indentado
+    # inocente del notebook, sin dejar de exigir el root exacto.
+    assert "if not _KERNEL_CORRIDOR:" in src
+    normalized = " ".join(src.split())
+    assert "tasks_p1.append( (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR) )" in normalized
 
 
 def test_cell6_mode_description_mentions_od_pair():
@@ -204,6 +212,47 @@ def test_e2e_od_pair_writes_single_route_no_dedup(tmp_path):
     assert np.isfinite(row["cost_total"])
     assert np.isfinite(row["length_m"])
     assert row.geometry.geom_type == "LineString"
+
+
+def test_e2e_corridor_astar_writes_single_route_and_skips_mcp(tmp_path):
+    # R3-corridor-notebook-branch-uncovered (revision): cobertura e2e del
+    # branch de Celda 6 con KERNEL="corridor_astar": la ruta se escribe en
+    # el mismo GPKG unificado y el resumen reporta el kernel, no MCP.
+    # Composicion ejecutada (R3-003, revision): celdas 1-4 de srcs (imports,
+    # funciones, parametros, verificacion) + srcs[5] = Celda 6 (ejecucion).
+    # srcs[4] es la Celda 5 de visualizacion diagnostica y no afecta la
+    # salida; se omite a proposito, igual que en test_e2e_od_pair_*.
+    srcs = _od_sources(
+        tmp_path,
+        "corridor_e2e",
+        **{
+            'KERNEL = "mcp_geometric"': 'KERNEL = "corridor_astar"',
+            "ORIGIN_SELECT_VALUE = None": 'ORIGIN_SELECT_VALUE = "3"',
+            "DEST_SELECT_VALUE = None": 'DEST_SELECT_VALUE = "1"',
+        },
+    )
+    _out, err = nh.run_code([*srcs[:4], srcs[5]], timeout=600)
+    assert err is None, err
+    session = tmp_path / "corridor_e2e"
+    gpkg = session / "red_completa_unificada.gpkg"
+    assert gpkg.exists()
+    gdf = gpd.read_file(gpkg, layer="rutas_unificadas")
+    assert len(gdf) == 1
+    row = gdf.iloc[0]
+    assert int(row["origin_id"]) == 3
+    assert int(row["dest_id"]) == 1
+    assert np.isfinite(row["cost_total"])
+    assert row.geometry.geom_type == "LineString"
+    # El branch corridor no debe ejecutar Fase 1 MCP ni reportar tracebacks.
+    # R3-001 (3er review): el gating de banners es comportamiento observable,
+    # asi que el e2e lo aserta sobre el output capturado.
+    assert "Tracebacks guardados" not in (_out or "")
+    assert "corridor_astar" in (_out or "")
+    assert "Fase 2 completada" not in (_out or "")
+    assert "Rutas reconstruidas" not in (_out or "")
+    assert "Total de orígenes para reconstrucción" not in (_out or "")
+    assert "Fase 2 (rutas," not in (_out or "")
+    assert "RESUMEN DE EJECUCIÓN (corridor_astar)" in (_out or "")
 
 
 def test_e2e_od_pair_missing_selection_shows_preview_and_stops(tmp_path):

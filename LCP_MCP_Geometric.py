@@ -301,8 +301,18 @@ ID_FIELD_NAME = 'id'
 # "od_pair": UNA sola ruta desde un punto de inicio hacia un punto de destino de
 # la MISMA capa (ALL_POINTS_SHAPEFILE). Se eligen por campo y valor (ver 2d);
 # si no hay valores definidos, la Celda 4 imprime la tabla de candidatos.
+# --- 2e. Kernel de calculo (opcional) ---
+# "mcp_geometric" (default): Dijkstra exacto de skimage (comportamiento
+#    historico, todos los modos). Una corrida por raiz sirve a todos los
+#    destinos.
+# "corridor_astar": A* jerarquico dirigido al objetivo (Fase 1 en baja
+#    resolucion -> corredor -> Fase 2 en alta resolucion). SOLO para el
+#    modo "od_pair" (una ruta 1->1 en rasters grandes). Modelo de coste:
+#    media de costes de celda * distancia (difiere del modelo geometrico
+#    de skimage; las rutas pueden diferir levemente).
 ANALYSIS_MODE = "all_pairs"   # "all_pairs" | "single_origin" | "cross_layers" | "od_pair"
 ORIGIN_ID = None              # requerido en modo single_origin (ID del punto)
+KERNEL = "mcp_geometric"   # "mcp_geometric" (default, todos los modos) | "corridor_astar" (solo od_pair)
 RESUME = True                 # reutilizar tracebacks de Fase 1 si la huella (S9) coincide
 MAX_WORKERS_PHASE1 = None     # None = auto (RAM/CPU); entero (p. ej. 4) para limitar los
                                 # workers de Fase 1 si topa con ArrayMemoryError en rams compartidas
@@ -389,6 +399,9 @@ if ANALYSIS_MODE not in _VALID_MODES:
     )
 if ANALYSIS_MODE == "single_origin" and ORIGIN_ID is None:
     raise ValueError("Modo single_origin requiere definir ORIGIN_ID en la Celda 3.")
+
+# --- Seleccion de kernel de calculo (S-kernel): fallar temprano ---
+planner.check_kernel(ANALYSIS_MODE, KERNEL)
 
 # --- S2/S4 (od_pair): seleccion estricta del par origen->destino ---
 # Selector por campo y valor SIN fallback silencioso a fid (L3): si el campo no
@@ -982,6 +995,10 @@ try:
     with dl.load_raster(COST_RASTER_PATH) as src:
         transform = src.transform
         raster_crs = src.crs
+        # R2-002/R3 (revision): capturar nodata/res DENTRO del with; leerlos
+        # despues de cerrar el dataset depende del caching de rasterio.
+        src_nodata = src.nodata
+        src_res = src.res
         original_cost_data = src.read(1)
         final_cost_raster = np.where(
             main_search_mask, original_cost_data, np.inf
@@ -992,12 +1009,67 @@ try:
 
     print(f"  Forma raster: {raster_shape}, dtype: {raster_dtype}")
 
-    print("[Paso 2/5] Escribiendo raster en memmap compartido...")
-    mm = np.memmap(memmap_path, dtype=raster_dtype, mode="w+", shape=raster_shape)
-    mm[:] = final_cost_raster[:]
-    mm.flush()
-    del mm, final_cost_raster
-    print(f"  Memmap escrito en: {memmap_path}")
+    # --- Kernel de calculo (opcion del usuario, KERNEL en Celda 3) ---
+    # "mcp_geometric" (default): pipeline MCP de siempre, intacto.
+    # "corridor_astar" (solo od_pair): A* jerarquico dirigido 1->1; calcula la
+    # ruta aqui mismo (una sola busqueda) y escribe el registro en el MISMO
+    # GPKG/flujo de salidas. Con _KERNEL_CORRIDOR no se ejecutan: la escritura
+    # del memmap, la huella de reanudacion, el warm-up de numba y TODOS los
+    # banners de Fase 1/2. Los bloques de Fase 1/2 corren SIN tareas (los
+    # Parallel sobre listas vacias no lanzan workers) y sus banners solo se
+    # emiten en modo MCP: en corridor la Fase 2 no produce trabajo ni salida.
+    _KERNEL_CORRIDOR = _IS_OD and KERNEL == "corridor_astar"
+    if _KERNEL_CORRIDOR:
+        t0_kernel = time.time()
+        print("\n[Kernel] corridor_astar: Fase 1 (baja resolucion) -> corredor -> Fase 2 (alta resolucion)")
+        _nodata_k = src_nodata if src_nodata is not None else float("inf")
+        _origin_pixel = proc.world_to_pixel(
+            transform, all_points[OD_ORIGIN_ID][0], all_points[OD_ORIGIN_ID][1]
+        )
+        _dest_pixel = proc.world_to_pixel(
+            transform, all_points[OD_DEST_ID][0], all_points[OD_DEST_ID][1]
+        )
+        path_px, cost_k = pf.corridor_astar_route(
+            final_cost_raster,
+            _nodata_k,
+            src_res[0],
+            abs(src_res[1]),
+            _origin_pixel,
+            _dest_pixel,
+            main_search_mask,
+        )
+        if path_px is None:
+            print(
+                f"  Sin ruta alcanzable entre {OD_ORIGIN_ID} y {OD_DEST_ID} "
+                "con corridor_astar: no se escribe ruta."
+            )
+        else:
+            _record = utils.build_route_record(
+                path_px, transform, OD_ORIGIN_ID, OD_DEST_ID, float(cost_k)
+            )
+            if _record is not None:
+                if os.path.exists(gpkg_tmp_path):
+                    os.remove(gpkg_tmp_path)
+                gpd.GeoDataFrame([_record], crs=raster_crs).to_file(
+                    gpkg_tmp_path, layer="rutas_unificadas", driver="GPKG", mode="w"
+                )
+                n_rutas_escritas = 1
+                print(
+                    f"  Ruta corridor_astar: {len(path_px)} pixeles, "
+                    f"coste acumulado {float(cost_k):.2f}"
+                )
+        dur_p1 = time.time() - t0_kernel
+        dur_p2 = 0.0
+
+    if _KERNEL_CORRIDOR:
+        print("[Paso 2/5] Omitido: corridor_astar trabaja sobre el raster en memoria.")
+    else:
+        print("[Paso 2/5] Escribiendo raster en memmap compartido...")
+        mm = np.memmap(memmap_path, dtype=raster_dtype, mode="w+", shape=raster_shape)
+        mm[:] = final_cost_raster[:]
+        mm.flush()
+        del mm, final_cost_raster
+        print(f"  Memmap escrito en: {memmap_path}")
 
     shared_data = {
         "memmap_path":  memmap_path,
@@ -1010,7 +1082,8 @@ try:
         # "bbox_buffer": None  # None = raster completo (garantiza optimalidad).
     }
 
-    warm_up_numba()
+    if not _KERNEL_CORRIDOR:
+        warm_up_numba()
 
     # --- S2/S1: plan de pares por modo (una raiz MCP por entrada de plan["roots"]) ---
     if _IS_CROSS:
@@ -1042,68 +1115,70 @@ try:
             for pid, coords in all_points.items()
         }
 
-    # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
-    import hashlib
-    import json as _json
+    # Corridor astar no usa tracebacks ni reanudacion: sin huella (R2-001).
+    if not _KERNEL_CORRIDOR:
+        # --- S9: huella de reanudacion (modo + origen + puntos + identidad del raster) ---
+        import hashlib
+        import json as _json
 
-    _fp_points = origin_points if _IS_CROSS else all_points
-    _fp_data = {
-        "mode": ANALYSIS_MODE,
-        "origin": ORIGIN_ID,
-        "od": [OD_ORIGIN_ID, OD_DEST_ID] if _IS_OD else None,
-        "invert": INVERT_DIRECTION,
-        "points": sorted(
-            (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
-            for k, v in _fp_points.items()
-        ),
-        "raster_size": os.path.getsize(COST_RASTER_PATH),
-        "raster_mtime": int(os.path.getmtime(COST_RASTER_PATH)),
-    }
-    if _IS_CROSS:
-        # S9: la segunda capa y la direccion resuelta son parte de la identidad de
-        # Fase 1; sin ellas se reutilizarian tracebacks de otra corrida (F4).
-        _fp_data["origin_layer"] = {
-            "path": os.path.abspath(ORIGIN_POINTS_PATH),
-            "field": ORIGIN_ID_FIELD,
-        }
-        _fp_data["dest_layer"] = {
-            "path": os.path.abspath(DEST_POINTS_PATH),
-            "field": DEST_ID_FIELD,
+        _fp_points = origin_points if _IS_CROSS else all_points
+        _fp_data = {
+            "mode": ANALYSIS_MODE,
+            "origin": ORIGIN_ID,
+            "od": [OD_ORIGIN_ID, OD_DEST_ID] if _IS_OD else None,
+            "invert": INVERT_DIRECTION,
             "points": sorted(
                 (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
-                for k, v in dest_points.items()
+                for k, v in _fp_points.items()
             ),
+            "raster_size": os.path.getsize(COST_RASTER_PATH),
+            "raster_mtime": int(os.path.getmtime(COST_RASTER_PATH)),
         }
-        _fp_data["inverted"] = inverted
-    # S9: la mascara define el area navegable; cambiar el poligono invalida los
-    # tracebacks aunque el raster y los puntos no cambien.
-    _fp_data["mask"] = None
-    if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
-        _fp_data["mask"] = {
-            "path": os.path.abspath(MASK_SHAPEFILE_PATH),
-            "size": os.path.getsize(MASK_SHAPEFILE_PATH),
-            "mtime": int(os.path.getmtime(MASK_SHAPEFILE_PATH)),
-        }
-    # S9/M3: EDGE_BUFFER_PX recorta el marco exterior del area navegable, asi que
-    # cambiarlo invalida los tracebacks aunque el raster y los puntos no cambien.
-    _fp_data["edge_buffer_px"] = int(EDGE_BUFFER_PX)
-    fingerprint = hashlib.sha256(
-        _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    meta_path = os.path.join(PHASE1_DIR, "phase1_meta.json")
-    _meta_ok = False
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as _fh:
-                _meta_ok = _json.load(_fh).get("fingerprint") == fingerprint
-        except (OSError, ValueError):
-            _meta_ok = False
-    if not _meta_ok:
-        # huella distinta o meta ilegible: los npz previos no sirven
-        shutil.rmtree(PHASE1_DIR, ignore_errors=True)
-        os.makedirs(PHASE1_DIR, exist_ok=True)
-    with open(meta_path, "w", encoding="utf-8") as _fh:
-        _json.dump({"fingerprint": fingerprint}, _fh)
+        if _IS_CROSS:
+            # S9: la segunda capa y la direccion resuelta son parte de la identidad de
+            # Fase 1; sin ellas se reutilizarian tracebacks de otra corrida (F4).
+            _fp_data["origin_layer"] = {
+                "path": os.path.abspath(ORIGIN_POINTS_PATH),
+                "field": ORIGIN_ID_FIELD,
+            }
+            _fp_data["dest_layer"] = {
+                "path": os.path.abspath(DEST_POINTS_PATH),
+                "field": DEST_ID_FIELD,
+                "points": sorted(
+                    (int(k), round(float(v[0]), 6), round(float(v[1]), 6))
+                    for k, v in dest_points.items()
+                ),
+            }
+            _fp_data["inverted"] = inverted
+        # S9: la mascara define el area navegable; cambiar el poligono invalida los
+        # tracebacks aunque el raster y los puntos no cambien.
+        _fp_data["mask"] = None
+        if MASK_SHAPEFILE_PATH and os.path.exists(MASK_SHAPEFILE_PATH):
+            _fp_data["mask"] = {
+                "path": os.path.abspath(MASK_SHAPEFILE_PATH),
+                "size": os.path.getsize(MASK_SHAPEFILE_PATH),
+                "mtime": int(os.path.getmtime(MASK_SHAPEFILE_PATH)),
+            }
+        # S9/M3: EDGE_BUFFER_PX recorta el marco exterior del area navegable, asi que
+        # cambiarlo invalida los tracebacks aunque el raster y los puntos no cambien.
+        _fp_data["edge_buffer_px"] = int(EDGE_BUFFER_PX)
+        fingerprint = hashlib.sha256(
+            _json.dumps(_fp_data, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        meta_path = os.path.join(PHASE1_DIR, "phase1_meta.json")
+        _meta_ok = False
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as _fh:
+                    _meta_ok = _json.load(_fh).get("fingerprint") == fingerprint
+            except (OSError, ValueError):
+                _meta_ok = False
+        if not _meta_ok:
+            # huella distinta o meta ilegible: los npz previos no sirven
+            shutil.rmtree(PHASE1_DIR, ignore_errors=True)
+            os.makedirs(PHASE1_DIR, exist_ok=True)
+        with open(meta_path, "w", encoding="utf-8") as _fh:
+            _json.dump({"fingerprint": fingerprint}, _fh)
 
     # --- PASO 3: FASE 1 (segun modo de analisis) ---
     if _IS_CROSS:
@@ -1127,7 +1202,10 @@ try:
         # elegido (sin dedup did > origin_id; el par pedido tal cual).
         origin_pixel = dest_pixels_all[OD_ORIGIN_ID]
         dest_pixels = {OD_DEST_ID: dest_pixels_all[OD_DEST_ID]}
-        tasks_p1.append((OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR))
+        if not _KERNEL_CORRIDOR:
+            tasks_p1.append(
+                (OD_ORIGIN_ID, origin_pixel, dest_pixels, shared_data, PHASE1_DIR)
+            )
     elif ANALYSIS_MODE == "single_origin":
         # Modo estrella (SSSP): UN solo MCP desde ORIGIN_ID hacia todos los demas
         # puntos; sin filtro did > origin_id (los ids menores tambien corresponden)
@@ -1181,7 +1259,8 @@ try:
     else:
         modo_desc = "all_pairs (N x N)"
     print(f"\nMODO: {modo_desc} | rutas esperadas: {n_expected}")
-    print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
+    if not _KERNEL_CORRIDOR:
+        print(f"[Paso 3/5] FASE 1 — MCP en paralelo ({n_jobs_p1} workers)...")
 
     # --- S9: reutilizar tracebacks con huella coincidente (RESUME) ---
     reusable = {}
@@ -1226,13 +1305,17 @@ try:
             cost_scalars_index[oid] = cdict
             pbar1.update(1)
 
-    dur_p1 = time.time() - t0_p1
-    print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
+    # R2-001/R3-corridor-summary: en corridor, dur_p1 conserva el tiempo del
+    # kernel y no se sobrescribe con el timing de una Fase 1 vacia.
+    if not _KERNEL_CORRIDOR:
+        dur_p1 = time.time() - t0_p1
+        print(f"\n[Paso 3/5] Fase 1 completada en {dur_p1:.1f} s.")
 
     cost_scalars_index.update(reusable)
     failed_origins = sorted(oid for oid, cdict in cost_scalars_index.items() if not cdict)
     n_computed = len(cost_scalars_index) - len(failed_origins)
-    print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
+    if not _KERNEL_CORRIDOR:
+        print(f"  Tracebacks guardados: {n_computed}/{len(tasks_p1)}")
 
     # Fallo duro: si algun worker fallo, la red resultante quedaria incompleta
     # y escribir un GPKG parcial seria enganoso. Detenemos antes de la Fase 2.
@@ -1265,7 +1348,8 @@ try:
         n_jobs_p2 = _calculate_n_jobs_for_phase(
             raster_shape, raster_dtype, phase=2, n_tasks=len(tasks_p2)
         )
-        print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
+        if not _KERNEL_CORRIDOR:
+            print(f"\n[Paso 4/5] FASE 2 — Reconstrucción en paralelo ({n_jobs_p2} workers)...")
 
         for origin_id, origin_coords in all_points.items():
             cost_scalars = cost_scalars_index.get(origin_id, {})
@@ -1276,7 +1360,10 @@ try:
                 (origin_id, origin_coords, dest_items, cost_scalars, transform, PHASE1_DIR)
             )
 
-        print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
+        # R2-partial-corridor-gating (revision): en corridor Fase 2 no tiene
+        # tareas; el banner solo tiene sentido en modo MCP.
+        if not _KERNEL_CORRIDOR:
+            print(f"  Total de orígenes para reconstrucción: {len(tasks_p2)}")
         t0_p2 = time.time()
 
         # S1: generador sin orden -> la memoria solo sostiene UN lote de origen;
@@ -1285,7 +1372,8 @@ try:
             n_jobs=n_jobs_p2, backend="loky", verbose=0, return_as="generator_unordered"
         )(delayed(postp.reconstruct_routes_from_disk)(args) for args in tasks_p2)
 
-        if os.path.exists(gpkg_tmp_path):
+        # corridor_astar ya escribio el temporal con su ruta; no se borra.
+        if not _KERNEL_CORRIDOR and os.path.exists(gpkg_tmp_path):
             os.remove(gpkg_tmp_path)
         with tqdm(
             total=len(tasks_p2), desc="Fase 2 (rutas)", unit="origen", disable=None
@@ -1303,9 +1391,12 @@ try:
                 )
                 n_rutas_escritas += len(records)
 
-        dur_p2 = time.time() - t0_p2
-        print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
-        print(f"  Rutas reconstruidas: {n_rutas_escritas}")
+        if not _KERNEL_CORRIDOR:
+            dur_p2 = time.time() - t0_p2
+            # R3-001 (revision): en corridor la Fase 2 no corre; sus
+            # banners confundirian la lectura de tiempos y rutas.
+            print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
+            print(f"  Rutas reconstruidas: {n_rutas_escritas}")
 
         # --- PASO 5: GeoPackage (rename atomico del temporal) ---
         print("\n[Paso 5/5] Escribiendo GeoPackage unificado...")
@@ -1356,9 +1447,15 @@ try:
         pipeline_ok = True
         total_duration = dur_p1 + dur_p2
         print("\n" + "="*60)
-        print("--- RESUMEN DE EJECUCIÓN (DOS FASES) ---")
-        print(f"  Fase 1 (MCP, {len(tasks_p1)} orígenes):    {dur_p1:.1f} s  ({n_jobs_p1} workers)")
-        print(f"  Fase 2 (rutas, {len(tasks_p2)} orígenes):  {dur_p2:.1f} s  ({n_jobs_p2} workers)")
+        if _KERNEL_CORRIDOR:
+            # R2-partial-corridor-gating (revision): el resumen describe lo
+            # que realmente corrio, sin filas de fases MCP que no ejecutaron.
+            print("--- RESUMEN DE EJECUCIÓN (corridor_astar) ---")
+            print(f"  Kernel corridor_astar (LR + corredor + HR): {dur_p1:.1f} s")
+        else:
+            print("--- RESUMEN DE EJECUCIÓN (DOS FASES) ---")
+            print(f"  Fase 1 (MCP, {len(tasks_p1)} orígenes):    {dur_p1:.1f} s  ({n_jobs_p1} workers)")
+            print(f"  Fase 2 (rutas, {len(tasks_p2)} orígenes):  {dur_p2:.1f} s  ({n_jobs_p2} workers)")
         print(f"  Total:                         {total_duration:.1f} s")
         print(f"  Rutas generadas:               {n_rutas_escritas}")
         print("="*60)
@@ -1448,6 +1545,8 @@ try:
                 # un estado parcial legible.
                 outputs.write_manifest(paths_out, manifest_rows)
 
+        # R3-002 (revision): aqui el guard seria codigo muerto (_IS_OD y
+        # _IS_CROSS son excluyentes), asi que los banners son incondicionales.
         dur_p2 = time.time() - t0_p2
         print(f"\n[Paso 4/5] Fase 2 completada en {dur_p2:.1f} s.")
         print(f"  Rutas reconstruidas: {n_rutas_escritas}")

@@ -187,3 +187,31 @@ def identical_pixel_pairs(origin_pixels, dest_pixels):
             pairs.append((oid, did))
 
     return sorted(pairs)
+
+
+KERNELS = ("mcp_geometric", "corridor_astar")
+
+
+def check_kernel(mode, kernel):
+    """
+    Valida la seleccion de kernel de calculo (notebook, Celda 3/4).
+
+    'mcp_geometric' es el default en TODOS los modos (comportamiento
+    historico intacto). 'corridor_astar' es el kernel dirigido 1->1 y
+    solo esta habilitado para el modo 'od_pair': en los otros modos una
+    sola corrida MCP por raiz sirve a TODOS los destinos, y el A* de
+    corredor (una busqueda por par) no tiene ventaja, solo coste.
+    """
+    if kernel not in KERNELS:
+        raise ValueError(
+            f"KERNEL no valido: {kernel!r}. Kernels disponibles: "
+            f"{', '.join(KERNELS)}"
+        )
+    if kernel == "corridor_astar" and mode != "od_pair":
+        raise ValueError(
+            "KERNEL='corridor_astar' solo esta habilitado para el modo "
+            f"'od_pair' (modo actual: {mode!r}). El kernel A* jerarquico "
+            "resuelve UN par por busqueda; para varios destinos por origen "
+            "use KERNEL='mcp_geometric'."
+        )
+    return kernel

@@ -1,6 +1,8 @@
 # lcp/pathfinder.py
 
+import math
 import os
+from itertools import pairwise
 
 import numpy as np
 from numba import njit
@@ -189,3 +191,244 @@ def compute_and_save_cost_surface(args):
 
         tb.print_exc()
         return (origin_id, {})
+
+
+# =====================================================================
+# Kernel alternativo: A* jerárquico con corredor (puerto de main)
+# ---------------------------------------------------------------------
+# Dijkstra (MCP_Geometric) expande uniformemente desde el origen y, para
+# una unica ruta lejana en un raster grande, explora casi toda la
+# superficie. Este kernel es dirigido al objetivo: Fase 1 busca en baja
+# resolucion para delimitar un corredor estrategico y Fase 2 busca en
+# alta resolucion SOLO dentro de ese corredor. Se expone como OPCION de
+# calculo seleccionable por el usuario (KERNEL en el notebook); el
+# pipeline MCP permanece intacto como default. Modelo de coste: el
+# mismo de main (media de costes de celda * distancia euclidiana entre
+# centros de pixel); difiere del modelo geometrico de skimage.
+# =====================================================================
+
+
+@njit(cache=True)
+def heuristic_numba(r1, c1, r2, c2, dx, dy):
+    """Heuristica de distancia euclidiana (en unidades del CRS)."""
+    return math.sqrt(((r2 - r1) * dy) ** 2 + ((c2 - c1) * dx) ** 2)
+
+
+@njit(cache=True)
+def a_star_search(cost_array, nodata_value, start_pixel, end_pixel, dx, dy, weight, search_mask):
+    """
+    A* sobre el raster de coste, optimizado con Numba (puerto fiel de main).
+
+    `came_from` guarda un codigo direccional 0..8: el predecesor de una
+    celda es (dr, dc) con dr = direction // 3 - 1 y dc = direction % 3 - 1.
+    Devuelve (path_found, came_from); la ruta se reconstruye con
+    `reconstruct_path`.
+    """
+    height, width = cost_array.shape
+    g_cost = np.full(cost_array.shape, np.inf, dtype=np.float64)
+    came_from = np.full(cost_array.shape, -1, dtype=np.int16)
+
+    open_set = np.zeros((1, 4), dtype=np.float64)
+    h_initial = heuristic_numba(start_pixel[0], start_pixel[1], end_pixel[0], end_pixel[1], dx, dy)
+    open_set[0] = [h_initial * weight, 0.0, start_pixel[0], start_pixel[1]]
+    g_cost[start_pixel] = 0.0
+    path_found = False
+
+    while open_set.shape[0] > 0:
+        min_idx = np.argmin(open_set[:, 0])
+        _f, g, r, c = open_set[min_idx]
+        current_pos = (int(r), int(c))
+
+        if open_set.shape[0] == 1:
+            open_set = np.zeros((0, 4), dtype=np.float64)
+        else:
+            open_set = np.vstack((open_set[:min_idx], open_set[min_idx + 1:]))
+
+        if current_pos == end_pixel:
+            path_found = True
+            break
+
+        if g > g_cost[current_pos]:
+            continue
+
+        cost_current = cost_array[current_pos]
+        for dr in range(-1, 2):
+            for dc in range(-1, 2):
+                if dr == 0 and dc == 0:
+                    continue
+
+                neighbor_pos = (current_pos[0] + dr, current_pos[1] + dc)
+
+                if not (0 <= neighbor_pos[0] < height and 0 <= neighbor_pos[1] < width):
+                    continue
+                if not search_mask[neighbor_pos]:
+                    continue
+
+                cost_neighbor = cost_array[neighbor_pos]
+                if cost_neighbor == nodata_value or np.isinf(cost_neighbor) or np.isnan(cost_neighbor):
+                    continue
+
+                dist_m = math.sqrt((dr * dy) ** 2 + (dc * dx) ** 2)
+                avg_cost = (cost_current + cost_neighbor) / 2.0
+                tentative_g_cost = g + (avg_cost * dist_m)
+
+                if tentative_g_cost < g_cost[neighbor_pos]:
+                    direction = (dr + 1) * 3 + (dc + 1)
+                    came_from[neighbor_pos] = direction
+                    g_cost[neighbor_pos] = tentative_g_cost
+                    h = heuristic_numba(neighbor_pos[0], neighbor_pos[1], end_pixel[0], end_pixel[1], dx, dy)
+                    new_f_cost = tentative_g_cost + (h * weight)
+
+                    new_entry = np.array(
+                        [[new_f_cost, tentative_g_cost, float(neighbor_pos[0]), float(neighbor_pos[1])]]
+                    )
+                    open_set = np.vstack((open_set, new_entry))
+
+    return path_found, came_from
+
+
+@njit(cache=True)
+def reconstruct_path(came_from_array, start_pixel, end_pixel):
+    """
+    Reconstruye la ruta a partir del array `came_from` direccional.
+
+    Cota de seguridad: came_from_array.size (un arbol de caminos minimos
+    no revisita celdas). Un bucle o un -1 intermedio devuelve None en vez
+    de colgarse.
+    """
+    path = np.zeros((came_from_array.size, 2), dtype=np.int32)
+    current_pos_r, current_pos_c = end_pixel
+    count = 0
+    limit = came_from_array.size
+
+    while (current_pos_r, current_pos_c) != start_pixel and count < limit:
+        path[count] = np.array([current_pos_r, current_pos_c])
+        direction = came_from_array[current_pos_r, current_pos_c]
+        if direction == -1:
+            return None
+
+        dc = (direction % 3) - 1
+        dr = (direction // 3) - 1
+        current_pos_r -= dr
+        current_pos_c -= dc
+        count += 1
+
+    path[count] = np.array([start_pixel[0], start_pixel[1]])
+    return path[: count + 1][::-1]
+
+
+def accumulate_cost(cost_array, nodata_value, res_x, res_y, pixel_path):
+    """
+    Coste acumulado de una ruta de pixeles con el modelo del kernel A*:
+    suma de (coste medio entre celdas consecutivas * distancia entre
+    centros). Reproduce el g_cost que el propio A* acumula para la ruta
+    final, de modo que `cost_total` es comparable entre fases.
+    """
+    total = 0.0
+    for (r0, c0), (r1, c1) in pairwise(pixel_path):
+        cost_0 = float(cost_array[r0, c0])
+        cost_1 = float(cost_array[r1, c1])
+        if cost_1 == nodata_value or not np.isfinite(cost_1) or not np.isfinite(cost_0):
+            return float("inf")
+        dist_m = math.sqrt(((r1 - r0) * res_y) ** 2 + ((c1 - c0) * res_x) ** 2)
+        total += ((cost_0 + cost_1) / 2.0) * dist_m
+    return total
+
+
+def corridor_astar_route(
+    cost_data,
+    nodata_value,
+    res_x,
+    res_y,
+    start_pixel,
+    end_pixel,
+    search_mask,
+    downsampling_factors=(32, 20, 10),
+    corridor_buffer_pixels=150,
+    heuristic_weight=1.0,
+):
+    """
+    Ruta 1->1 con el kernel A* jerarquico (comportamiento de main).
+
+    Fase 1: intenta A* en baja resolucion con cada factor de
+    downsampling (de mayor a menor granularidad, primer exito gana).
+    Fase 2: A* en alta resolucion restringido al corredor alrededor de
+    la ruta de baja resolucion INTERSECTADO con la mascara de estudio;
+    si el corredor no produce ruta, PLAN B: A* en toda la mascara.
+
+    Devuelve (path_pixels, cost_total): path_pixels es None y cost_total
+    inf cuando no hay ruta alcanzable. `cost_data` debe ser un array
+    float con np.inf (o nodata_value) en las celdas prohibidas; el
+    caller aplica la mascara de estudio igual que en el pipeline MCP.
+
+    Defaults heredados de main y su rol: `downsampling_factors` es la
+    escalera de granularidad (32 = exploracion mas gruesa; 20 y 10
+    refinan si la anterior no encuentra ruta); `corridor_buffer_pixels`
+    es el ancho del corredor de Fase 2 alrededor de la ruta LR, y es el
+    parametro que mas afecta si el corredor contiene la ruta optima.
+    Cambiarlos cambia la calidad de la ruta silenciosamente.
+
+    R3-astar-heuristic-admissibility (revision): con `heuristic_weight=1.0`
+    la heuristica euclidiana es admisible SOLO si todo coste de celda es
+    >= 1.0; en superficies con costes < 1.0 puede sobreestimar y la ruta
+    puede ser suboptima bajo el propio modelo del kernel. `heuristic_weight=0`
+    convierte la busqueda en Dijkstra exacto (mas lento, sin direccion).
+    """
+    import lcp.processing as proc
+
+    start_pixel = (int(start_pixel[0]), int(start_pixel[1]))
+    end_pixel = (int(end_pixel[0]), int(end_pixel[1]))
+
+    path_pixels_lr = None
+    successful_factor = None
+    for factor in downsampling_factors:
+        cost_lr, dx_lr, dy_lr = proc.create_low_res_data(cost_data, res_x, res_y, factor)
+        mask_lr = search_mask[::factor, ::factor]
+        # Clamp al grid LR recortado (floor(dim/factor)): un pixel dentro de
+        # las ultimas factor-1 filas/columnas del raster caeria fuera del grid
+        # y, con bounds checking deshabilitado en numba, g_cost[start_lr] = 0.0
+        # seria una escritura fuera de rango antes del PLAN B (hallazgos R2/R3
+        # de la revision nativa).
+        start_lr = (
+            min(start_pixel[0] // factor, cost_lr.shape[0] - 1),
+            min(start_pixel[1] // factor, cost_lr.shape[1] - 1),
+        )
+        end_lr = (
+            min(end_pixel[0] // factor, cost_lr.shape[0] - 1),
+            min(end_pixel[1] // factor, cost_lr.shape[1] - 1),
+        )
+        found_lr, came_from_lr = a_star_search(
+            cost_lr, nodata_value, start_lr, end_lr, dx_lr, abs(dy_lr), heuristic_weight, mask_lr
+        )
+        if found_lr:
+            path_pixels_lr = reconstruct_path(came_from_lr, start_lr, end_lr)
+            successful_factor = factor
+            break
+
+    corridor_mask = None
+    if path_pixels_lr is not None:
+        corridor_mask = proc.create_search_corridor(
+            path_pixels_lr, cost_data.shape, successful_factor, corridor_buffer_pixels
+        )
+        final_mask = np.logical_and(corridor_mask, search_mask)
+        found_hr, came_from_hr = a_star_search(
+            cost_data, nodata_value, start_pixel, end_pixel, res_x, abs(res_y), heuristic_weight, final_mask
+        )
+        if found_hr:
+            path_hr = reconstruct_path(came_from_hr, start_pixel, end_pixel)
+            if path_hr is not None:
+                cost_total = accumulate_cost(cost_data, nodata_value, res_x, res_y, path_hr)
+                return path_hr, cost_total
+
+    # PLAN B: busqueda en toda la mascara de estudio (igual que main).
+    found_fb, came_from_fb = a_star_search(
+        cost_data, nodata_value, start_pixel, end_pixel, res_x, abs(res_y), heuristic_weight, search_mask
+    )
+    if found_fb:
+        path_fb = reconstruct_path(came_from_fb, start_pixel, end_pixel)
+        if path_fb is not None:
+            cost_total = accumulate_cost(cost_data, nodata_value, res_x, res_y, path_fb)
+            return path_fb, cost_total
+
+    return None, float("inf")
+

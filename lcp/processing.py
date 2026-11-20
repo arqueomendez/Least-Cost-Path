@@ -107,3 +107,46 @@ def create_mask_from_vector(vector_path, raster_src, all_touched=False):
     )
     print("Máscara creada exitosamente.")
     return mask.astype(bool)
+
+
+def create_low_res_data(cost_data, res_x, res_y, factor):
+    """
+    Version de baja resolucion del raster de coste por promedio de bloques
+    (kernel A* jerarquico, puerto de main).
+
+    Recibe el array EN MEMORIA (no un dataset rasterio): el pipeline MCP ya
+    aplico la mascara de estudio antes de escribir el memmap compartido, y el
+    kernel A* trabaja sobre esa misma superficie. Devuelve (cost_lr, dx, dy)
+    con la resolucion multiplicada por `factor`. Las dimensiones se recortan
+    a multiplos exactos de `factor` (los pixeles sobrantes de la esquina se
+    descartan, igual que main al pedir out_shape=floor(dim/factor)).
+    """
+    h = (cost_data.shape[0] // factor) * factor
+    w = (cost_data.shape[1] // factor) * factor
+    cropped = cost_data[:h, :w]
+    blocks = cropped.reshape(h // factor, factor, w // factor, factor)
+    low_res_data = blocks.mean(axis=(1, 3))
+    dx_low = res_x * factor
+    dy_low = res_y * factor
+    return low_res_data, dx_low, dy_low
+
+
+def create_search_corridor(path_low_res, high_res_shape, factor, buffer_pixels):
+    """
+    Mascara de corredor: discos de radio `buffer_pixels` alrededor de cada
+    pixel de la ruta de baja resolucion, mapeado a la grilla de alta
+    resolucion (puerto fiel de main con skimage.draw.disk).
+    """
+    from skimage.draw import disk
+
+    corridor_mask = np.zeros(high_res_shape, dtype=bool)
+    if path_low_res is None or len(path_low_res) == 0:
+        return corridor_mask
+
+    for r_low, c_low in path_low_res:
+        r_high = int(r_low * factor + factor / 2)
+        c_high = int(c_low * factor + factor / 2)
+        rr, cc = disk((r_high, c_high), buffer_pixels, shape=high_res_shape)
+        corridor_mask[rr, cc] = True
+
+    return corridor_mask
